@@ -1,0 +1,30 @@
+# 忽略规则：发布用，别把本地状态与备份带进仓库
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# 插件本地状态（队列、调试日志、轮数计数）
+.dsh/
+almost-for-ever/
+
+# 备份与临时产物
+_backup*/
+*.bak*
+.bak_*
+*.orig
+_scratch/
+dist/
+release/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 作者本地校准测试（绑死本机的库结构，别人跑不了）
+test/local/
+
+# 本机自己的库白话名（数据，不进仓库）
+labels.local.json

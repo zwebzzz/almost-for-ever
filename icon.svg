@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Almost For Ever">
+  <defs>
+    <linearGradient id="afe-ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6aa8ff"/>
+      <stop offset="100%" stop-color="#8f6bff"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="26" fill="none" stroke="url(#afe-ring)" stroke-width="3" stroke-linecap="round" stroke-dasharray="132 32"/>
+  <circle cx="32" cy="32" r="13" fill="none" stroke="url(#afe-ring)" stroke-width="2.5" opacity="0.75"/>
+  <circle cx="32" cy="32" r="4" fill="url(#afe-ring)"/>
+  <circle cx="32" cy="6" r="3.2" fill="#8f6bff"/>
+</svg>
