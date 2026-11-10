@@ -28,7 +28,13 @@ STATE_DIR = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
                          ".dsh", "almost-for-ever")
 QUEUE = os.path.join(STATE_DIR, "queue.json")
 LOG = os.path.join(STATE_DIR, "debug.log")
-BASE = os.environ.get("AFE_BASE", "http://127.0.0.1:53528")
+
+# 端口每次重启都可能变，别写死。
+# 优先级：AFE_BASE（手动覆盖）> DSH_WEB_URL（DSH 自己导出的当前 GUI 地址）> 兜底。
+BASE = (os.environ.get("AFE_BASE")
+        or os.environ.get("DSH_WEB_URL")
+        or "http://127.0.0.1:53528")
+BASE = BASE.rstrip("/")
 
 OK = "[ok]"
 BAD = "[!!]"
@@ -91,7 +97,9 @@ def check_http():
             print(f"   {BAD} targets 为空 —— labels.js 可能没加载")
         return items
     print(f"   {BAD} GET  /pending  → {code} {str(body)[:120]}")
-    print("        插件没加载 / 没注册 webServer / GUI 换了端口（用 AFE_BASE 覆盖）")
+    print(f"        base={BASE} —— 插件没加载 / 没注册 webServer / 端口不对")
+    print("        DSH 每次重启端口都可能变：确认 DSH_WEB_URL 是不是当前窗口的地址，")
+    print("        或手动指定 AFE_BASE=http://127.0.0.1:<端口>")
     return None
 
 
