@@ -7,7 +7,7 @@
 名字取自 *Almost Ever After: Whim's End* ——「几乎没有永远」。记忆本来就是会变的：库会改名、会拆、会合、会退役。所以要的不是「记住永远」，是**永远跟得上**。
 
 ```
-npm 名：almost-for-ever        许可证：MIT        版本：0.4.0
+包名：almost-for-ever        许可证：MIT        版本：0.4.0
 ```
 
 ---
@@ -202,13 +202,18 @@ npm 名：almost-for-ever        许可证：MIT        版本：0.4.0
 
 ## 安装
 
+还没发布到 npm，从 GitHub 装：
+
 ```bash
-dsh plugin --profile <profile> add <本目录绝对路径>
+git clone https://github.com/zwebzzz/almost-for-ever.git
+dsh plugin --profile <profile> add <clone 下来的目录绝对路径>
 ```
 
-或者装进 npm 后用包名。装完**关掉 DSH 窗口再打开**（桌面端没有「刷新页面」这个操作）。
+装完**关掉 DSH 窗口再打开**（桌面端没有「刷新页面」这个操作）。
 
 装完想确认链路通不通：`python tools/probe.py` —— 把「状态目录 / 接口 / 队列 / 日志」四个环节逐个点亮。
+
+> **第一次装上、记忆目录是空的也别慌**：右下角的 🗂 会提示「还没有找到任何记忆库」，点一下就能生成起手模板（三本 / 八本 / 英文三本）。
 
 ---
 
