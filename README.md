@@ -146,7 +146,7 @@
 便利贴弹出 → 你点「记住 / 改写 / 删掉」→ 落进记忆库
 ```
 
-**触发时机**：默认每 5 轮自动，或你说「记一下 / 记住 / 记录一下」立刻触发。
+**触发时机**：默认每 3 轮自动，或你说「记一下 / 记住 / 记录一下」立刻触发。
 **不做「会话结束」兜底** —— 模型判断不了会话结束了没有，用户做完事就走了。
 **口令只认你本人打的字**：宿主的运行时上下文快照也以 `user/message` 落盘，
 但它带 `source.kind = 'plugin'`，所以不会误触发。
@@ -259,7 +259,7 @@ dsh plugin --profile <profile> add <clone 下来的目录绝对路径>
     budgetChars: 700                           # 注入文本的硬预算（字符）
     writeEnabled: true                         # 写入开关
     intervalUnit: turns                        # 触发口径：turns | tokens
-    intervalValue: 7                           # 该口径下的阈值
+    intervalValue: 3                           # 该口径下的阈值
     debug: false                               # 写 ~/.dsh/almost-for-ever/debug.log
 ```
 
