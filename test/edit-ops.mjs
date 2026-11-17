@@ -5,7 +5,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { resolveTarget, replaceInMemory, deleteInMemory } from '../lib/write-mode.js'
+import { resolveTarget, replaceInMemory, deleteInMemory, appendToMemory } from '../lib/write-mode.js'
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'afe-edit-'))
 const LIB = '02-preferences'
@@ -148,6 +148,66 @@ writeSrc()
 res = deleteInMemory(TMP, { stem: LIB, target: { original: '- 根本没有这一行' } })
 check('原文对不上就拒绝', !res.ok && /已经变了/.test(res.reason), res.reason)
 check('拒绝时文件没被改', fs.readFileSync(file, 'utf8') === SRC)
+
+console.log()
+console.log('='.repeat(72))
+console.log('appendToMemory：表格节能不能追加')
+console.log('='.repeat(72))
+
+// ⑩ 表格节 + 内容已是同列数的表格行 —— 放行，插在表格最后一行之后
+writeSrc()
+res = appendToMemory(TMP, { stem: LIB, section: '三、对照表', text: '| 很慢 | 换渠道 |' })
+lines = readLines()
+check('表格行追加成功', res.ok && res.format === 'table', res.reason)
+check('插在表格末尾', lines[lines.indexOf('| 报错 | 看日志 |') + 1] === '| 很慢 | 换渠道 |')
+check('表格后面的东西没被切断', lines.filter((l) => l.trim().startsWith('|')).length === 5, `${lines.filter((l) => l.trim().startsWith('|')).length} 行`)
+
+// ⑪ 表格节 + 内容不是表格行 —— 拒绝，并说清该写成什么样
+writeSrc()
+res = appendToMemory(TMP, { stem: LIB, section: '三、对照表', text: '很慢就换渠道' })
+check('非表格行被拒绝', !res.ok && /一行表格/.test(res.reason), res.reason)
+check('拒绝时文件没被改', fs.readFileSync(file, 'utf8') === SRC)
+
+// ⑫ 表格节 + 列数不对 —— 拒绝，报出两边各几列
+writeSrc()
+res = appendToMemory(TMP, { stem: LIB, section: '三、对照表', text: '| 很慢 | 换渠道 | 备注 |' })
+check('列数不对被拒绝', !res.ok && /2 列/.test(res.reason) && /3 列/.test(res.reason), res.reason)
+check('列数不对时文件没被改', fs.readFileSync(file, 'utf8') === SRC)
+
+// ⑬ 表格节 + 只写了表头分隔行 —— 拒绝（那不是数据）
+writeSrc()
+res = appendToMemory(TMP, { stem: LIB, section: '三、对照表', text: '| --- | --- |' })
+check('分隔行被拒绝', !res.ok && /分隔行/.test(res.reason), res.reason)
+
+// ⑭ bullet 节不受影响 —— 仍然加 `- `
+writeSrc()
+res = appendToMemory(TMP, { stem: LIB, section: '一、偏好', text: '新的一条偏好' })
+lines = readLines()
+check('bullet 节照旧追加', res.ok && res.format === 'bullet', res.reason)
+check('bullet 前缀加对了', lines.includes('- 新的一条偏好'))
+
+console.log()
+console.log('='.repeat(72))
+console.log('行尾：文件是 CRLF 就别插 LF 进去')
+console.log('='.repeat(72))
+
+// ⑮ 表格行追加到 CRLF 文件 —— 新行也要 CRLF
+const CRLF_LIB = '03-software'
+const CRLF = SRC.replace(/\n/g, '\r\n')
+fs.writeFileSync(path.join(TMP, `${CRLF_LIB}.md`), CRLF, 'utf8')
+res = appendToMemory(TMP, { stem: CRLF_LIB, section: '三、对照表', text: '| 很慢 | 换渠道 |' })
+let crlf = fs.readFileSync(path.join(TMP, `${CRLF_LIB}.md`), 'utf8').split('\n')
+check('CRLF 文件追加成功', res.ok, res.reason)
+check('新行也是 CRLF', crlf.some((l) => l === '| 很慢 | 换渠道 |\r'), JSON.stringify(crlf.find((l) => l.includes('很慢'))))
+check('没有混进 LF 行', crlf.filter((l) => l !== '' && !l.endsWith('\r')).length === 0, `${crlf.filter((l) => l !== '' && !l.endsWith('\r')).length} 行是 LF`)
+
+// ⑯ 改写 CRLF 文件的一行 —— 改写后仍是 CRLF
+fs.writeFileSync(path.join(TMP, `${CRLF_LIB}.md`), CRLF, 'utf8')
+const crlfHit = resolveTarget(TMP, CRLF_LIB, '| 卡住 | 重启 |')
+res = replaceInMemory(TMP, { stem: CRLF_LIB, text: '| 卡住 | 先重启再看日志 |', target: { original: crlfHit.original } })
+crlf = fs.readFileSync(path.join(TMP, `${CRLF_LIB}.md`), 'utf8').split('\n')
+check('CRLF 文件改写成功', res.ok, res.reason)
+check('改写后仍是 CRLF', crlf.includes('| 卡住 | 先重启再看日志 |\r'), JSON.stringify(crlf.find((l) => l.includes('先重启'))))
 
 console.log()
 console.log('='.repeat(72))
