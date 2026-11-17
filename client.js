@@ -456,7 +456,38 @@ window.__ModuleLoader__.load({
         setItems([])
       }, [])
 
-      return { items, targets, choices, setChoices, open, setOpen, busy, error, act, dismissAll }
+      // 「说两句」：把用户的话挂到那条候选上。这里**不调模型** ——
+      // 要求会在下一轮随上下文交给模型判断（见 lib/write-mode.js 的 almost-for-ever-revise）。
+      // note 传空串 = 撤回。
+      const revise = React.useCallback(async (item, note) => {
+        setBusy(true)
+        try {
+          const r = await fetch(`${API}/revise`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: item.id, note }),
+          })
+          const data = await r.json().catch(() => ({}))
+          if (data && data.ok === false) {
+            setError(data.error || '没能记下你的要求')
+            return false
+          }
+          setError('')
+          setItems((prev) =>
+            prev.map((x) => (x.id === item.id ? { ...x, note: String(note || '') } : x)),
+          )
+          return true
+        } catch {
+          return false
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      return {
+        items, targets, choices, setChoices, open, setOpen, busy, error, act, revise, dismissAll,
+      }
     }
 
     const cardStyle = {
@@ -523,11 +554,14 @@ window.__ModuleLoader__.load({
 
     function StickyNote() {
       try {
-        const { items, targets, choices, setChoices, open, setOpen, busy, error, act, dismissAll } =
+        const { items, targets, choices, setChoices, open, setOpen, busy, error, act, revise, dismissAll } =
           useCandidates()
         const [look, setLook] = useLook()
         const drag = useDrag('note', look, setLook)
         const chipsOn = useChipsOn()
+        // 「说两句」的输入框：草稿与展开状态都按候选 id 存，不写盘
+        const [drafts, setDrafts] = React.useState({})
+        const [editing, setEditing] = React.useState({})
         if (items.length === 0) return null
         if (!chipsOn) return null
 
@@ -654,20 +688,114 @@ window.__ModuleLoader__.load({
                       },
                       ...targets.map((t) => h('option', { key: t.stem, value: t.stem }, t.label)),
                     ),
-                h(
-                  'div',
-                  null,
-                  h(
-                    'button',
-                    { type: 'button', style: btn('ok'), disabled: busy, onClick: () => act(it, 'accept') },
-                    op === 'replace' ? '改写' : op === 'delete' ? '删掉' : '记住',
-                  ),
-                  h(
-                    'button',
-                    { type: 'button', style: btn('no'), disabled: busy, onClick: () => act(it, 'reject') },
-                    op === 'delete' ? '保留' : '不要',
-                  ),
-                ),
+                it.note
+                  ? h(
+                      'div',
+                      {
+                        style: {
+                          marginTop: 6,
+                          padding: '6px 8px',
+                          borderRadius: 6,
+                          background: TH.bg1,
+                          border: `1px solid ${TH.border}`,
+                          fontSize: 11,
+                          lineHeight: 1.6,
+                        },
+                      },
+                      h('div', { style: { color: TH.fg2 } }, '你的要求'),
+                      h('div', { style: { wordBreak: 'break-word' } }, it.note),
+                      h(
+                        'div',
+                        { style: { color: TH.fg2, marginTop: 4 } },
+                        '下一轮对话时交给模型判断',
+                      ),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          style: { ...chipStyle, alignSelf: 'auto', marginTop: 6, padding: '2px 10px' },
+                          disabled: busy,
+                          onClick: () => revise(it, ''),
+                          title: '撤回这句话，恢复成自己决定',
+                        },
+                        '撤回',
+                      ),
+                    )
+                  : h(
+                      'div',
+                      null,
+                      h(
+                        'button',
+                        { type: 'button', style: btn('ok'), disabled: busy, onClick: () => act(it, 'accept') },
+                        op === 'replace' ? '改写' : op === 'delete' ? '删掉' : '记住',
+                      ),
+                      h(
+                        'button',
+                        { type: 'button', style: btn('no'), disabled: busy, onClick: () => act(it, 'reject') },
+                        op === 'delete' ? '保留' : '不要',
+                      ),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          style: btn('no'),
+                          disabled: busy,
+                          onClick: () => setEditing((p) => ({ ...p, [it.id]: !p[it.id] })),
+                          title: '让模型按你的意思判断：改写、合并、换库，或者干脆别记',
+                        },
+                        '说两句',
+                      ),
+                    ),
+                editing[it.id] && !it.note
+                  ? h(
+                      'div',
+                      { style: { marginTop: 6 } },
+                      h('textarea', {
+                        style: {
+                          width: '100%',
+                          minHeight: 48,
+                          resize: 'vertical',
+                          boxSizing: 'border-box',
+                          background: TH.bg1,
+                          color: TH.fg,
+                          border: `1px solid ${TH.border2}`,
+                          borderRadius: 6,
+                          padding: '5px 7px',
+                          fontSize: 11,
+                          lineHeight: 1.5,
+                          fontFamily: 'inherit',
+                        },
+                        placeholder: '比如：太长了压成一句 / 并到上面那条 / 这个不该记',
+                        value: drafts[it.id] || '',
+                        onChange: (e) => {
+                          const v = e.target.value
+                          setDrafts((p) => ({ ...p, [it.id]: v }))
+                        },
+                      }),
+                      h(
+                        'div',
+                        { style: { textAlign: 'right' } },
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            style: { ...chipStyle, alignSelf: 'auto', padding: '2px 10px' },
+                            disabled: busy,
+                            onClick: async () => {
+                              const text = String(drafts[it.id] || '').trim()
+                              if (!text) return
+                              const ok = await revise(it, text)
+                              if (ok) {
+                                setEditing((p) => ({ ...p, [it.id]: false }))
+                                setDrafts((p) => ({ ...p, [it.id]: '' }))
+                              }
+                            },
+                          },
+                          '交给模型',
+                        ),
+                      ),
+                    )
+                  : null,
               )
             }),
             error

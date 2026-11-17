@@ -72,8 +72,10 @@ const ctx = {
   inject: (deps, cb) => cb(subCtx),
   get: () => undefined,
   systemPrompt: {
+    // 按名字取「提醒」那一个：插件注册了不止一个 context provider
+    // （almost-for-ever-nudge 是提醒，almost-for-ever-revise 是「说两句」的要求）
     context(opts) {
-      nudgeOpts = opts
+      if (!opts || opts.name !== 'almost-for-ever-revise') nudgeOpts = opts
       return () => {}
     },
   },
