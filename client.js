@@ -1769,6 +1769,7 @@ window.__ModuleLoader__.load({
       accept: '已确认',
       reject: '丢弃',
       hit: '记忆命中',
+      revise: '说两句',
       settings: '改设置',
     }
 
@@ -1780,6 +1781,7 @@ window.__ModuleLoader__.load({
       accept: TH.ok,
       reject: TH.fg2,
       hit: TH.brand,
+      revise: TH.warn,
       settings: TH.fg2,
     }
 
