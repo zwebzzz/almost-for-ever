@@ -25,6 +25,32 @@ window.__ModuleLoader__.load({
     const API = '/almost-for-ever'
     const POLL_MS = 4000
 
+    // ── 「记忆」标签页接管会话正文时，把输入框收起来 ──────────
+    //
+    // 会话正文 = 一个滚动容器（[data-conversation-scroll]），里面先放当前视图、
+    // 再放输入框（[data-composer-seat]，sticky 贴底）。所以任何一个 view 都会被
+    // 输入框压住 —— 对一个「看数据」的页面来说很碍事。
+    //
+    // 做法：本页挂载时给滚动容器打一个标记，CSS 里把输入框隐藏；切走时摘掉标记。
+    // ⚠️ 必须保留「有待审批 / 有问题待答 / 有方案待审」的情况 —— 那些卡片就长在
+    // 输入框座位上，藏掉会让人没法确认，会话直接卡死。
+    const SURFACE_ATTR = 'data-afe-surface'
+    const SURFACE_CSS =
+      '[data-conversation-scroll][data-afe-surface]>[data-composer-seat]:not(:has([data-approval-key],[data-question-key],[data-plan-review-key])){display:none}'
+
+    function ensureSurfaceStyle() {
+      try {
+        const doc = globalThis.document
+        if (!doc || doc.querySelector('style[data-afe-surface]')) return
+        const style = doc.createElement('style')
+        style.setAttribute('data-afe-surface', '')
+        style.textContent = SURFACE_CSS
+        doc.head.appendChild(style)
+      } catch {
+        /* 拿不到 document 就算了，页面照样能看 */
+      }
+    }
+
     const TH = {
       bg: 'var(--dsw-alias-bg-overlay)',
       bg1: 'var(--dsw-alias-bg-layer-1)',
@@ -1259,6 +1285,7 @@ window.__ModuleLoader__.load({
         padding: '18px 20px 48px',
         maxWidth: 1000,
         margin: '0 auto',
+        minHeight: '100%',
         color: TH.fg,
         fontSize: 13,
         lineHeight: 1.6,
@@ -1637,6 +1664,21 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null)
       const [offline, setOffline] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
+      const pageRef = React.useRef(null)
+
+      // 占住正文：收起输入框（保留审批 / 提问 / 方案卡），并把滚动位置归零 ——
+      // 否则从「对话」切过来时沿用的是聊天页停在底部的滚动位置，一进来就看见半截。
+      React.useLayoutEffect(() => {
+        ensureSurfaceStyle()
+        const node = pageRef.current
+        const scroll = node ? node.closest('[data-conversation-scroll]') : null
+        if (!scroll) return undefined
+        scroll.setAttribute(SURFACE_ATTR, '')
+        scroll.scrollTop = 0
+        return () => {
+          scroll.removeAttribute(SURFACE_ATTR)
+        }
+      }, [])
 
       const load = React.useCallback(async () => {
         try {
@@ -1709,7 +1751,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { style: V.page },
+        { style: V.page, ref: pageRef },
         // ① 标识
         h(
           'div',
