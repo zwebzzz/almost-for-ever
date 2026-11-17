@@ -1,6 +1,6 @@
 {
   "name": "almost-for-ever",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "type": "module",
   "description": "Live memory index for DSH: derives a catalog from your memory files on every turn, injects only the matching entries, and lets the model propose candidates you confirm before they are written.",
   "keywords": [

@@ -534,8 +534,10 @@ window.__ModuleLoader__.load({
                 '—',
               ),
             ),
-            ...items.map((it) =>
-              h(
+            ...items.map((it) => {
+              const op = it.op || 'append'
+              const isEdit = op !== 'append'
+              return h(
                 'div',
                 {
                   key: it.id,
@@ -545,37 +547,70 @@ window.__ModuleLoader__.load({
                     borderTop: `1px solid ${TH.border}`,
                   },
                 },
-                h('div', { style: { wordBreak: 'break-word' } }, it.text),
-                h('div', { style: { color: TH.fg2, fontSize: 11, marginTop: 2 } }, it.kindLabel),
+                // 改写 / 删除：先把「要被动的原文」原样亮出来，用户才知道动的是哪一条
+                isEdit
+                  ? h(
+                      'div',
+                      {
+                        style: {
+                          color: TH.fg2,
+                          fontSize: 11,
+                          textDecoration: 'line-through',
+                          wordBreak: 'break-word',
+                        },
+                        title: '要被改掉 / 删掉的那一行',
+                      },
+                      it.original,
+                    )
+                  : h('div', { style: { wordBreak: 'break-word' } }, it.text),
+                op === 'replace'
+                  ? h(
+                      'div',
+                      { style: { wordBreak: 'break-word', marginTop: 2 } },
+                      '→ ' + it.text,
+                    )
+                  : null,
                 h(
-                  'select',
-                  {
-                    style: selectStyle,
-                    value: choices[it.id] || it.guessed || '02-preferences',
-                    onChange: (e) => {
-                      const v = e.target.value
-                      setChoices((prev) => ({ ...prev, [it.id]: v }))
-                    },
-                    title: '这条要写进哪本记忆',
-                  },
-                  ...targets.map((t) => h('option', { key: t.stem, value: t.stem }, t.label)),
+                  'div',
+                  { style: { color: TH.fg2, fontSize: 11, marginTop: 2 } },
+                  isEdit
+                    ? (op === 'replace' ? '改写' : '删除') +
+                      (it.line ? ` · 第 ${it.line} 行` : '') +
+                      (it.guessedLabel ? ` · ${it.guessedLabel}` : '')
+                    : it.kindLabel,
                 ),
+                // 改写/删除的目标由 match 定死，换库就定位不到了，所以不给下拉
+                isEdit
+                  ? null
+                  : h(
+                      'select',
+                      {
+                        style: selectStyle,
+                        value: choices[it.id] || it.guessed || '02-preferences',
+                        onChange: (e) => {
+                          const v = e.target.value
+                          setChoices((prev) => ({ ...prev, [it.id]: v }))
+                        },
+                        title: '这条要写进哪本记忆',
+                      },
+                      ...targets.map((t) => h('option', { key: t.stem, value: t.stem }, t.label)),
+                    ),
                 h(
                   'div',
                   null,
                   h(
                     'button',
                     { type: 'button', style: btn('ok'), disabled: busy, onClick: () => act(it, 'accept') },
-                    '记住',
+                    op === 'replace' ? '改写' : op === 'delete' ? '删掉' : '记住',
                   ),
                   h(
                     'button',
                     { type: 'button', style: btn('no'), disabled: busy, onClick: () => act(it, 'reject') },
-                    '不要',
+                    op === 'delete' ? '保留' : '不要',
                   ),
                 ),
-              ),
-            ),
+              )
+            }),
             error
               ? h(
                   'div',
