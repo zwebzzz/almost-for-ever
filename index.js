@@ -10,7 +10,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { applyWriteMode } from './lib/write-mode.js'
+import { applyWriteMode, noteReadHits } from './lib/write-mode.js'
 import { stem, stemForms } from './lib/stem.js'
 
 const DEFAULT_MEMORY_DIR = path.join(
@@ -688,6 +688,17 @@ export function apply(ctx, config = {}) {
           const result = search(libs, query, maxHits)
           const rendered = renderHits(result, tokenize(query))
           if (!rendered) return ''
+          // 记一笔命中，给「记忆」标签页看（哪本书被命中了几次）。
+          // scope 是 Agent，agent.session 才是 Session —— 换算一次，
+          // 与 write-mode 里的 scopeSession() 同一个道理。
+          try {
+            const scope = assembleContext && assembleContext.scope
+            const session =
+              scope && typeof scope === 'object' && scope.session ? scope.session : scope
+            noteReadHits(session, result.hits, Math.round(rendered.length / 1.5))
+          } catch {
+            /* 记账失败不影响注入 */
+          }
           return rendered.length > budgetChars
             ? `${rendered.slice(0, budgetChars)}\n（已截断）`
             : rendered

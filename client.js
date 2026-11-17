@@ -325,6 +325,34 @@ window.__ModuleLoader__.load({
 
     // ── 便利贴 ────────────────────────────────────────────
 
+    // 浮层开关（设置页里改）。关掉后两个小圆片不渲染 —— 但它们背后的服务
+    // 照常工作，从「记忆」标签页仍能看到全部状态。
+    // 单独拉 /settings 而不是 /stats：浮层不需要那些数据，
+    // 每 4 秒扫一遍记忆库只为决定「要不要画个按钮」太浪费。
+    function useChipsOn() {
+      const [on, setOn] = React.useState(true)
+      React.useEffect(() => {
+        let alive = true
+        const tick = async () => {
+          try {
+            const r = await fetch(`${API}/settings`, { credentials: 'same-origin' })
+            if (!r.ok) return
+            const d = await r.json()
+            if (alive && d && d.settings) setOn(d.settings.chips !== false)
+          } catch {
+            /* 静默 */
+          }
+        }
+        tick()
+        const id = setInterval(tick, 10000)
+        return () => {
+          alive = false
+          clearInterval(id)
+        }
+      }, [])
+      return on
+    }
+
     function useCandidates() {
       const [items, setItems] = React.useState([])
       const [targets, setTargets] = React.useState(FALLBACK_TARGETS)
@@ -470,7 +498,9 @@ window.__ModuleLoader__.load({
           useCandidates()
         const [look, setLook] = useLook()
         const drag = useDrag('note', look, setLook)
+        const chipsOn = useChipsOn()
         if (items.length === 0) return null
+        if (!chipsOn) return null
 
         const pos = drag.live || (look.pos && look.pos.note) || null
         const shell = Object.assign(
@@ -1154,6 +1184,8 @@ window.__ModuleLoader__.load({
         const [wantLook, setWantLook] = React.useState(false)
         const [look, setLook] = useLook()
         const drag = useDrag('tree', look, setLook)
+        const chipsOn = useChipsOn()
+        if (!chipsOn) return null
 
         const pos = drag.live || (look.pos && look.pos.tree) || null
         const shell = Object.assign(
@@ -1210,9 +1242,835 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ── 「记忆」标签页（座位 conversation.view）──────────────
+    //
+    // 会话顶部那排标签页就是 conversation.view。注册字段：id / order / label，
+    // 再加一个 inject(sessionId) —— 它的返回值会作为 props 交给组件，
+    // 组件自己占满整个 viewArea。
+    //
+    // 数据全部来自 host 的 /almost-for-ever/stats，每 4 秒拉一次。
+    // 拉不到就显示「未连接」，全程不 throw（座位里 throw = 整页空白）。
+
+    const V = {
+      page: {
+        padding: '18px 20px 48px',
+        maxWidth: 1000,
+        margin: '0 auto',
+        color: TH.fg,
+        fontSize: 13,
+        lineHeight: 1.6,
+        boxSizing: 'border-box',
+      },
+      card: {
+        background: TH.bg1,
+        border: `1px solid ${TH.border}`,
+        borderRadius: 12,
+        padding: '14px 16px',
+      },
+      label: { fontSize: 11, color: TH.fg2, letterSpacing: 0.3 },
+      value: { fontSize: 20, fontWeight: 600, lineHeight: 1.25, marginTop: 2 },
+      sectionTitle: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: TH.fg2,
+        letterSpacing: 1,
+        margin: '22px 0 10px',
+      },
+      grid: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))',
+        gap: 10,
+      },
+      btn: {
+        height: 28,
+        minWidth: 28,
+        padding: '0 8px',
+        borderRadius: 8,
+        border: `1px solid ${TH.border2}`,
+        background: TH.bg,
+        color: TH.fg,
+        cursor: 'pointer',
+        fontSize: 14,
+        lineHeight: 1,
+      },
+    }
+
+    const agoText = (at) => {
+      if (!at) return '—'
+      const s = Math.max(0, Math.round((Date.now() - at) / 1000))
+      if (s < 60) return `${s} 秒前`
+      const m = Math.round(s / 60)
+      if (m < 60) return `${m} 分钟前`
+      const hh = Math.round(m / 60)
+      if (hh < 24) return `${hh} 小时前`
+      return `${Math.round(hh / 24)} 天前`
+    }
+
+    const durText = (ms) => {
+      const m = Math.floor((ms || 0) / 60000)
+      if (m < 60) return `${m} 分钟`
+      const hh = Math.floor(m / 60)
+      return `${hh} 小时 ${m % 60} 分`
+    }
+
+    // 插件标识：一张带三行字的卡片 —— 跟 icon.svg 同一套形状。
+    function Mark({ size = 30 }) {
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          'aria-hidden': 'true',
+          style: { flexShrink: 0 },
+        },
+        h('rect', {
+          x: 3.2,
+          y: 4.2,
+          width: 17.6,
+          height: 15.6,
+          rx: 3,
+          stroke: TH.brand,
+          strokeWidth: 1.6,
+        }),
+        h('path', {
+          d: 'M7.4 9.2h9.2M7.4 12.4h9.2M7.4 15.6h5.4',
+          stroke: TH.brand,
+          strokeWidth: 1.4,
+          strokeLinecap: 'round',
+          opacity: 0.8,
+        }),
+      )
+    }
+
+    function StatCard({ label, value, hint, tone }) {
+      return h(
+        'div',
+        { style: V.card },
+        h('div', { style: V.label }, label),
+        h(
+          'div',
+          { style: Object.assign({}, V.value, tone ? { color: tone } : null) },
+          value,
+        ),
+        hint ? h('div', { style: { fontSize: 11, color: TH.fg2 } }, hint) : null,
+      )
+    }
+
+    function Progress({ done, total }) {
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+      return h(
+        'div',
+        {
+          style: {
+            height: 6,
+            borderRadius: 999,
+            background: TH.bg2,
+            overflow: 'hidden',
+            marginTop: 8,
+          },
+        },
+        h('div', {
+          style: {
+            width: `${pct}%`,
+            height: '100%',
+            background: TH.brand,
+            borderRadius: 999,
+            transition: 'width 0.2s',
+          },
+        }),
+      )
+    }
+
+    function LibBar({ item, max }) {
+      const pct = max > 0 ? Math.max(2, Math.round((item.tokens / max) * 100)) : 0
+      return h(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0' } },
+        h(
+          'div',
+          {
+            title: item.stem,
+            style: {
+              width: 148,
+              flexShrink: 0,
+              fontSize: 12,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            },
+          },
+          item.label || item.stem,
+        ),
+        h(
+          'div',
+          {
+            style: {
+              flex: 1,
+              height: 8,
+              background: TH.bg2,
+              borderRadius: 999,
+              overflow: 'hidden',
+            },
+          },
+          h('div', {
+            style: {
+              width: `${pct}%`,
+              height: '100%',
+              background: TH.brand,
+              opacity: 0.72,
+              borderRadius: 999,
+            },
+          }),
+        ),
+        h(
+          'div',
+          { style: { width: 52, textAlign: 'right', fontSize: 11, color: TH.fg2 } },
+          fmtTok(item.tokens),
+        ),
+      )
+    }
+
+    function Toggle({ label, hint, value, onChange, disabled }) {
+      return h(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '9px 0',
+            borderBottom: `1px solid ${TH.border}`,
+          },
+        },
+        h(
+          'div',
+          null,
+          h('div', { style: { fontSize: 13 } }, label),
+          hint ? h('div', { style: { fontSize: 11, color: TH.fg2 } }, hint) : null,
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            disabled: Boolean(disabled),
+            onClick: () => onChange(!value),
+            title: value ? '点一下关掉' : '点一下打开',
+            style: {
+              flexShrink: 0,
+              width: 44,
+              height: 24,
+              borderRadius: 999,
+              border: 'none',
+              position: 'relative',
+              cursor: disabled ? 'default' : 'pointer',
+              background: value ? TH.brand : TH.bg2,
+              opacity: disabled ? 0.55 : 1,
+              transition: 'background 0.15s',
+            },
+          },
+          h('span', {
+            style: {
+              position: 'absolute',
+              top: 3,
+              left: value ? 23 : 3,
+              width: 18,
+              height: 18,
+              borderRadius: 999,
+              background: '#fff',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.28)',
+              transition: 'left 0.15s',
+            },
+          }),
+        ),
+      )
+    }
+
+    function Stepper({ label, hint, value, min, max, onChange, disabled }) {
+      const step = (d) => {
+        const next = Math.min(max, Math.max(min, (Number(value) || min) + d))
+        if (next !== value) onChange(next)
+      }
+      return h(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '9px 0',
+            borderBottom: `1px solid ${TH.border}`,
+          },
+        },
+        h(
+          'div',
+          null,
+          h('div', { style: { fontSize: 13 } }, label),
+          hint ? h('div', { style: { fontSize: 11, color: TH.fg2 } }, hint) : null,
+        ),
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+          h(
+            'button',
+            Object.assign(
+              {
+                type: 'button',
+                disabled: Boolean(disabled) || value <= min,
+                onClick: () => step(-1),
+              },
+              { style: Object.assign({}, V.btn, { opacity: value <= min ? 0.45 : 1 }) },
+            ),
+            '−',
+          ),
+          h(
+            'div',
+            {
+              style: {
+                minWidth: 38,
+                textAlign: 'center',
+                fontSize: 15,
+                fontWeight: 600,
+                fontVariantNumeric: 'tabular-nums',
+              },
+            },
+            String(value),
+          ),
+          h(
+            'button',
+            Object.assign(
+              {
+                type: 'button',
+                disabled: Boolean(disabled) || value >= max,
+                onClick: () => step(1),
+              },
+              { style: Object.assign({}, V.btn, { opacity: value >= max ? 0.45 : 1 }) },
+            ),
+            '+',
+          ),
+        ),
+      )
+    }
+
+    /** 设置区（标签页和「设置」页共用同一个组件，只是外面包不包卡片）。 */
+    function SettingsBlock({ settings, intervalUnit, onPatch, busy }) {
+      if (!settings) return null
+      const unit = intervalUnit === 'tokens' ? 'token' : '轮'
+      return h(
+        'div',
+        null,
+        h(Stepper, {
+          label: '自动审视间隔',
+          hint:
+            intervalUnit === 'tokens'
+              ? '每累计这么多 token 让模型回头看一眼'
+              : '每这么多轮让模型回头看一眼（改完立刻生效，但当前会话的计数不清零）',
+          value: settings.intervalValue,
+          min: 1,
+          max: 50,
+          disabled: busy,
+          onChange: (v) => onPatch({ intervalValue: v }),
+        }),
+        h(Toggle, {
+          label: '写入提醒',
+          hint: '关掉后模型不会再收到「该审视一下」的提示，弹窗也不会出现',
+          value: settings.writeEnabled !== false,
+          disabled: busy,
+          onChange: (v) => onPatch({ writeEnabled: v }),
+        }),
+        h(Toggle, {
+          label: '浮层小圆片',
+          hint: '右下角那两个（📌 待确认 / 🗂 记忆库）要不要显示；关掉后仍可从本页操作',
+          value: settings.chips !== false,
+          disabled: busy,
+          onChange: (v) => onPatch({ chips: v }),
+        }),
+        h(Toggle, {
+          label: '调试日志',
+          hint: '把每个事件写进 ~/.dsh/almost-for-ever/debug.log（排查用）',
+          value: settings.debug === true,
+          disabled: busy,
+          onChange: (v) => onPatch({ debug: v }),
+        }),
+        h(
+          'div',
+          { style: { fontSize: 11, color: TH.fg2, marginTop: 10 } },
+          `单位：每 ${settings.intervalValue} ${unit}。重启 DSH 后计数从 0 开始，前 ${settings.intervalValue} 轮不会自动提醒。`,
+        ),
+      )
+    }
+
+    const EV_NAME = {
+      nudge: '安排审视',
+      injected: '提醒进上下文',
+      cue: '口令触发',
+      propose: '提交候选',
+      accept: '已确认',
+      reject: '丢弃',
+      hit: '记忆命中',
+      settings: '改设置',
+    }
+
+    const EV_COLOR = {
+      nudge: TH.brand,
+      injected: TH.ok,
+      cue: TH.warn,
+      propose: TH.brand,
+      accept: TH.ok,
+      reject: TH.fg2,
+      hit: TH.brand,
+      settings: TH.fg2,
+    }
+
+    /** 会话标签页本体。props.sessionId 由注册时的 inject(sessionId) 提供。 */
+    function MemoryView(props) {
+      const raw = props && props.sessionId
+      const sessionId =
+        typeof raw === 'string' ? raw : raw && typeof raw.id === 'string' ? raw.id : ''
+
+      const [data, setData] = React.useState(null)
+      const [offline, setOffline] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+
+      const load = React.useCallback(async () => {
+        try {
+          const r = await fetch(
+            `${API}/stats?session=${encodeURIComponent(sessionId)}`,
+            { credentials: 'same-origin' },
+          )
+          if (!r.ok) throw new Error(String(r.status))
+          const d = await r.json()
+          if (d && d.ok) {
+            setData(d)
+            setOffline(false)
+          } else {
+            setOffline(true)
+          }
+        } catch {
+          setOffline(true)
+        }
+      }, [sessionId])
+
+      React.useEffect(() => {
+        let alive = true
+        const tick = () => {
+          if (alive) load()
+        }
+        tick()
+        const id = setInterval(tick, POLL_MS)
+        return () => {
+          alive = false
+          clearInterval(id)
+        }
+      }, [load])
+
+      const patch = React.useCallback(async (p) => {
+        setBusy(true)
+        try {
+          const r = await fetch(`${API}/settings`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(p),
+          })
+          const d = await r.json().catch(() => ({}))
+          if (d && d.settings) {
+            setData((prev) =>
+              prev
+                ? Object.assign({}, prev, {
+                    settings: d.settings,
+                    interval: Object.assign({}, prev.interval, {
+                      value: d.settings.intervalValue,
+                    }),
+                  })
+                : prev,
+            )
+          }
+        } catch {
+          /* 静默 */
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      const s = data && data.session
+      const g = data && data.global
+      const libs = (data && data.libs) || []
+      const maxTok = libs.length ? libs[0].tokens : 0
+      const topLibs = libs.slice(0, 10)
+      const recent = (data && data.recent) || []
+      const intervalValue = (data && data.interval && data.interval.value) || 0
+
+      return h(
+        'div',
+        { style: V.page },
+        // ① 标识
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 } },
+          h(Mark, { size: 34 }),
+          h(
+            'div',
+            { style: { flex: 1, minWidth: 0 } },
+            h(
+              'div',
+              { style: { fontSize: 17, fontWeight: 600, letterSpacing: 0.2 } },
+              'Almost For Ever',
+            ),
+            h(
+              'div',
+              { style: { fontSize: 11, color: TH.fg2 } },
+              '长期、可塑的记忆 —— 索引在运行时从你的记忆库派生，不预存',
+            ),
+          ),
+          h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                color: offline ? TH.fg2 : TH.ok,
+                flexShrink: 0,
+              },
+              title: offline ? '拉不到数据：DSH 可能刚重启，或插件没装上' : '运行中',
+            },
+            h('span', {
+              style: {
+                width: 7,
+                height: 7,
+                borderRadius: 999,
+                background: offline ? TH.fg2 : TH.ok,
+                display: 'inline-block',
+              },
+            }),
+            offline ? '未连接' : '运行中',
+          ),
+        ),
+        offline
+          ? h(
+              'div',
+              {
+                style: Object.assign({}, V.card, {
+                  marginTop: 14,
+                  borderColor: TH.border2,
+                  fontSize: 12,
+                  color: TH.fg2,
+                }),
+              },
+              '拉不到运行数据。这个页面每 4 秒重试一次；如果一直这样，多半是 DSH 刚重启还没加载完插件，或者这个插件没装进当前 profile。',
+            )
+          : null,
+
+        // ② 本会话
+        h('div', { style: V.sectionTitle }, '本会话'),
+        s
+          ? h(
+              React.Fragment,
+              null,
+              h(
+                'div',
+                { style: V.grid },
+                h(StatCard, {
+                  label: '轮次',
+                  value: String(s.turns),
+                  hint: `距下次自动审视 ${Math.max(0, intervalValue - (s.turns % Math.max(1, intervalValue)))} 轮`,
+                }),
+                h(StatCard, {
+                  label: '提醒已注入',
+                  value: String(s.injected),
+                  hint: s.lastNudgeAt ? `最近 ${agoText(s.lastNudgeAt)}` : '还没注入过',
+                  tone: s.injected > 0 ? TH.ok : null,
+                }),
+                h(StatCard, {
+                  label: '记忆命中',
+                  value: String(s.hits),
+                  hint: s.hits ? `约 ${fmtTok(s.hitTokens)} tok 进过上下文` : '本会话还没命中',
+                }),
+                h(StatCard, {
+                  label: '候选',
+                  value: `${s.accepted} / ${s.added}`,
+                  hint: `确认 / 提交（丢弃 ${s.rejected}）`,
+                }),
+              ),
+              s.hitLibs && s.hitLibs.length
+                ? h(
+                    'div',
+                    {
+                      style: {
+                        marginTop: 10,
+                        fontSize: 11,
+                        color: TH.fg2,
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 6,
+                      },
+                    },
+                    h('span', null, '命中过：'),
+                    ...s.hitLibs.map((it) =>
+                      h(
+                        'span',
+                        {
+                          key: it.stem,
+                          style: {
+                            border: `1px solid ${TH.border}`,
+                            borderRadius: 999,
+                            padding: '1px 8px',
+                            color: TH.fg,
+                          },
+                        },
+                        `${it.label || it.stem} ×${it.count}`,
+                      ),
+                    ),
+                  )
+                : null,
+            )
+          : h(
+              'div',
+              { style: Object.assign({}, V.card, { fontSize: 12, color: TH.fg2 }) },
+              '本会话还没开始计数。每开一轮就 +1，攒够 ',
+              String(intervalValue || 3),
+              ' 轮后模型会自动回头看一眼。刚重启过 DSH 的话，计数从 0 开始。',
+            ),
+
+        // ③ 记忆库
+        h(
+          'div',
+          { style: Object.assign({}, V.sectionTitle, { display: 'flex', justifyContent: 'space-between' }) },
+          h('span', null, '记忆库'),
+          h(
+            'span',
+            { style: { fontWeight: 400, letterSpacing: 0, color: TH.fg2 } },
+            data ? `${libs.length} 个库 · 约 ${fmtTok(data.totalTokens)} tok` : '—',
+          ),
+        ),
+        libs.length
+          ? h(
+              'div',
+              { style: V.card },
+              ...topLibs.map((it) => h(LibBar, { key: it.stem, item: it, max: maxTok })),
+              libs.length > topLibs.length
+                ? h(
+                    'div',
+                    { style: { fontSize: 11, color: TH.fg2, marginTop: 8 } },
+                    `另有 ${libs.length - topLibs.length} 个库未列出（按体积排序，只显示前 ${topLibs.length} 个）`,
+                  )
+                : null,
+            )
+          : h(
+              'div',
+              { style: Object.assign({}, V.card, { fontSize: 12, color: TH.fg2 }) },
+              EMPTY_HINT,
+            ),
+
+        // ④ 最近活动
+        h('div', { style: V.sectionTitle }, '最近活动'),
+        recent.length
+          ? h(
+              'div',
+              { style: Object.assign({}, V.card, { padding: '8px 16px' }) },
+              ...recent.slice(0, 14).map((it, i) =>
+                h(
+                  'div',
+                  {
+                    key: `${it.at}-${i}`,
+                    style: {
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 10,
+                      padding: '5px 0',
+                      borderTop: i === 0 ? 'none' : `1px solid ${TH.border}`,
+                      fontSize: 12,
+                    },
+                  },
+                  h(
+                    'span',
+                    {
+                      style: {
+                        width: 84,
+                        flexShrink: 0,
+                        color: EV_COLOR[it.ev] || TH.fg2,
+                        fontWeight: 600,
+                      },
+                    },
+                    EV_NAME[it.ev] || it.ev,
+                  ),
+                  h(
+                    'span',
+                    {
+                      style: {
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      },
+                      title: it.text,
+                    },
+                    it.text || '—',
+                  ),
+                  h(
+                    'span',
+                    { style: { flexShrink: 0, fontSize: 11, color: TH.fg2 } },
+                    agoText(it.at),
+                  ),
+                ),
+              ),
+            )
+          : h(
+              'div',
+              { style: Object.assign({}, V.card, { fontSize: 12, color: TH.fg2 }) },
+              '这次启动以来还没有活动记录。',
+            ),
+
+        // ⑤ 本次运行
+        g
+          ? h(
+              'div',
+              { style: { marginTop: 18, fontSize: 11, color: TH.fg2, lineHeight: 1.9 } },
+              `本次运行：${g.sessions} 个会话 · ${g.turns} 轮 · 提醒注入 ${g.injected} 次 · 命中 ${g.hits} 次 · 已确认 ${g.accepted} 条 · 待确认 ${g.queue} 条 · 已跑 ${durText(g.uptimeMs)}`,
+            )
+          : null,
+
+        // ⑥ 设置
+        h('div', { style: V.sectionTitle }, '设置'),
+        h(
+          'div',
+          { style: V.card },
+          h(SettingsBlock, {
+            settings: data && data.settings,
+            intervalUnit: data && data.interval && data.interval.unit,
+            onPatch: patch,
+            busy,
+          }),
+        ),
+      )
+    }
+
+    /** DSH 设置里的「记忆」页：同一套控件，外面不套卡片。 */
+    function SettingsSection() {
+      const [data, setData] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+
+      const load = React.useCallback(async () => {
+        try {
+          const r = await fetch(`${API}/stats`, { credentials: 'same-origin' })
+          if (!r.ok) return
+          const d = await r.json()
+          if (d && d.ok) setData(d)
+        } catch {
+          /* 静默 */
+        }
+      }, [])
+
+      React.useEffect(() => {
+        let alive = true
+        const tick = () => {
+          if (alive) load()
+        }
+        tick()
+        const id = setInterval(tick, POLL_MS * 3)
+        return () => {
+          alive = false
+          clearInterval(id)
+        }
+      }, [load])
+
+      const patch = React.useCallback(async (p) => {
+        setBusy(true)
+        try {
+          const r = await fetch(`${API}/settings`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(p),
+          })
+          const d = await r.json().catch(() => ({}))
+          if (d && d.settings) {
+            setData((prev) =>
+              prev
+                ? Object.assign({}, prev, {
+                    settings: d.settings,
+                    interval: Object.assign({}, prev.interval, {
+                      value: d.settings.intervalValue,
+                    }),
+                  })
+                : prev,
+            )
+          }
+        } catch {
+          /* 静默 */
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      return h(
+        'div',
+        { style: { padding: '4px 2px 12px', color: TH.fg, fontSize: 13, lineHeight: 1.6 } },
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 } },
+          h(Mark, { size: 26 }),
+          h(
+            'div',
+            null,
+            h('div', { style: { fontSize: 14, fontWeight: 600 } }, 'Almost For Ever'),
+            h(
+              'div',
+              { style: { fontSize: 11, color: TH.fg2 } },
+              data
+                ? `${(data.libs || []).length} 个记忆库 · 约 ${fmtTok(data.totalTokens)} tok`
+                : '正在读取…',
+            ),
+          ),
+        ),
+        h(SettingsBlock, {
+          settings: data && data.settings,
+          intervalUnit: data && data.interval && data.interval.unit,
+          onPatch: patch,
+          busy,
+        }),
+      )
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
+        // 会话标签页：「记忆」
+        try {
+          ctx.slots.inject('conversation.view', () =>
+            ctx.slots.register(
+              {
+                name: 'conversation.view',
+                id: 'memory',
+                order: 40,
+                label: () => '记忆',
+                // inject 的返回值会作为 props 交给组件 —— 这里是这个会话的 id，
+                // 组件拿它去查「这个对话的运行情况」。
+                inject: (sessionId) => ({ sessionId }),
+              },
+              MemoryView,
+            ),
+          )
+        } catch {
+          /* 座位未声明时静默 */
+        }
+        // DSH 设置里的「记忆」页
+        try {
+          ctx.slots.inject('settings.section', () =>
+            ctx.slots.register(
+              { name: 'settings.section', id: 'almost-for-ever', order: 120, label: () => '记忆' },
+              SettingsSection,
+            ),
+          )
+        } catch {
+          /* 同上 */
+        }
         try {
           ctx.slots.inject('shell.overlay', () =>
             ctx.slots.register(

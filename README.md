@@ -201,6 +201,33 @@
 
 ---
 
+## 界面：会话里的「记忆」标签页
+
+每个会话顶部多一个 **记忆** 标签，点开是整页面板 —— 它回答一个问题：**这个对话里，记忆到底做了什么？**
+
+| 区块 | 看什么 |
+|---|---|
+| **本会话** | 轮次 / 提醒已注入 / 记忆命中 / 候选（已确认·已提交）四张卡 |
+| **命中过的库** | 这个会话真正被检索到的库，按次数排 |
+| **记忆库** | 每个库的体积条（前 10），一眼看出谁最胖 |
+| **最近活动** | 提醒、注入、命中、提交、确认的时间线（倒序 14 条） |
+| **本次运行** | 从 DSH 启动到现在累计 |
+| **设置** | 轮次间隔、写入开关、浮层开关、调试日志 |
+
+数字全部来自插件自己的计数，不读会话日志、不额外花 token。每 4 秒拉一次 `/almost-for-ever/stats?session=<id>`。
+
+同一套设置也在 **设置 → 记忆**（座位 `settings.section`），两处改的是同一份文件：
+
+```
+~/.dsh/almost-for-ever/settings.json
+```
+
+只存**改过的字段**，所以删掉这个文件就回到默认值。优先级：`settings.json` > 插件 config > 内置默认。
+
+> 轮次计数是**进程内**的：关掉 DSH 窗口再打开就从 0 开始数。所以刚重启的前几轮不会弹提醒，这是正常的。
+
+---
+
 ## 界面：记忆库结构面板
 
 右下角一枚「🗂 记忆库」小圆片，点开是面板：
@@ -263,6 +290,8 @@ dsh plugin --profile <profile> add <clone 下来的目录绝对路径>
     debug: false                               # 写 ~/.dsh/almost-for-ever/debug.log
 ```
 
+`writeEnabled` / `intervalValue` / `debug` 也可以在**标签页的设置区**里改（写进 `~/.dsh/almost-for-ever/settings.json`，优先级高于这里的 yaml）—— 改完不用重启。
+
 ### 两种触发口径
 
 | `intervalUnit` | `intervalValue` 含义 | 适合谁 |
@@ -315,6 +344,7 @@ test/                        ← 谁 clone 下来都能跑（不需要你自己�
   portability-diag.mjs       逐条打印「命中了什么、差在哪」
   format-detect.mjs          章节格式探测
   edit-ops.mjs               改写 / 删除：定位唯一行、前缀保持、编号顺延、列数守卫
+  stats.mjs                  标签页的数据：轮次计数、幂等注入、统计接口、设置落盘
   scaffold.mjs               起手模板生成 + 派生
   manifest.mjs               三处模块 id 是否逐字一致
   fake-ctx.mjs               共用的假 ctx
