@@ -513,6 +513,9 @@ export function search(libs, query, limit = 3) {
       if (sec.meta) continue
       const why = []
       let topical = 0
+      // 具体证据：标题/正文真的命中了几处。库级标签一命中，整本书每一节都同分，
+      // 只按分数排序时前几名就退化成「文件里排最前的几节」——所以同分要比这个。
+      let evidence = 0
 
       // 档位：作者的库有人工标签 → 严格；别人的库只有动态标签 → 放宽。
       // 为什么分档：正文兜底原本要「先有主题分」才参与（防止噪音），
@@ -555,6 +558,7 @@ export function search(libs, query, limit = 3) {
       if (titlePass || (titleSingleHit && qTok.size >= 4)) {
         const trust = qTok.size <= 2 ? 0.55 : 1
         topical += titleCov * 8 * trust
+        evidence += 3
         why.push(`标题${Math.round(titleCov * 100)}%(${titleHitCount}词)`)
       }
 
@@ -565,6 +569,7 @@ export function search(libs, query, limit = 3) {
           // 严格档：主题分为 0 时正文不救场（这就是原来的设计）
         } else {
           topical += bodyCov * bodyWeight
+          evidence += 1
           why.push(`正文${Math.round(bodyCov * 100)}%`)
         }
       }
@@ -595,11 +600,12 @@ export function search(libs, query, limit = 3) {
       }
 
       score *= libWeight
-      if (score > 0) scored.push({ score, lib, sec, why })
+      if (score > 0) scored.push({ score, evidence, lib, sec, why })
     }
   }
 
-  scored.sort((a, b) => b.score - a.score)
+  // 同分时先看「具体证据」多的：否则整库标签命中后，前几名就是文件里排最前的几节。
+  scored.sort((a, b) => b.score - a.score || b.evidence - a.evidence)
   return { queryTags: qt, hits: scored.slice(0, limit) }
 }
 
@@ -649,9 +655,9 @@ export const inject = ['systemPrompt']
 
 export function apply(ctx, config = {}) {
   const memoryDir = config.memoryDir || DEFAULT_MEMORY_DIR
-  const maxHits = Number.isFinite(config.maxHits) ? config.maxHits : 3
+  const maxHits = Number.isFinite(config.maxHits) ? config.maxHits : 5
   // 每轮注入的硬预算（字符数）。超过就只保留最靠前的几条。
-  const budgetChars = Number.isFinite(config.budgetChars) ? config.budgetChars : 700
+  const budgetChars = Number.isFinite(config.budgetChars) ? config.budgetChars : 1200
 
   // 每个 agent 最近一次的提问；systemPrompt 组装时按 scope 取。
   const latestQuery = new WeakMap()
