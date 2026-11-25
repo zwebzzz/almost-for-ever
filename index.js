@@ -248,6 +248,38 @@ function countTokenHits(queryTokens, targetTokens) {
   return hit
 }
 
+/**
+ * 查询词在正文里真实出现了几次（ASCII 按词边界，中文按子串）。
+ *
+ * 为什么需要：正文 token 是去重集合，只能回答「有没有提到」，
+ * 回答不了「提了几次」——而后者才是同分时最可靠的区分依据。
+ */
+function countTokenFrequency(text, queryTokens) {
+  const lower = String(text || '').toLowerCase()
+  let total = 0
+  for (const q of queryTokens) {
+    if (!q) continue
+    const ascii = /^[a-z0-9_\-./]+$/.test(q)
+    let from = 0
+    while (true) {
+      const at = lower.indexOf(q, from)
+      if (at < 0) break
+      if (ascii) {
+        // 词边界：查 github 不该把 git 的每次出现都算进来，反之亦然。
+        const before = lower[at - 1]
+        const after = lower[at + q.length]
+        const cleanBefore = !before || !/[a-z0-9]/.test(before)
+        const cleanAfter = !after || !/[a-z0-9]/.test(after)
+        if (cleanBefore && cleanAfter) total += 1
+      } else {
+        total += 1
+      }
+      from = at + q.length
+    }
+  }
+  return total
+}
+
 function overlapRatio(queryTokens, targetTokens) {
   if (!queryTokens.size || !targetTokens.size) return 0
   let hit = 0
@@ -437,6 +469,8 @@ export function deriveIndex(memoryDir) {
         return {
           title: s.title,
           line: s.line,
+          // 原始正文：同分排序要回答「这个词到底出现几次」，而 token 集合是去重的。
+          bodyRaw: bodyText,
           endLine: s.line + s.body.length,
           // 真实正文字符数 —— UI 面板据此估算 token（中文约 1.5 字符/token）
           chars,
@@ -565,11 +599,20 @@ export function search(libs, query, limit = 3) {
       // ③ 正文兜底：严格档只在已有主题分时参与；宽松档允许单独命中。
       const bodyCov = overlapRatio(qTok, sec.bodyTokens)
       if (bodyCov >= bodyMinCov) {
+        const freqBonus = Math.min(countTokenFrequency(sec.bodyRaw, qTok), 3)
         if (strict && topical <= 0) {
-          // 严格档：主题分为 0 时正文不救场（这就是原来的设计）
+          // 严格档原本完全不救场。但「查询词整词出现在正文里」本身就是证据：
+          // 全库 22 处正文提到 GitHub，只有 2 节带 GitHub 标签或标题含 github，
+          // 剩下 20 处正文写满了却召回不到 —— 检索退化成「只认标签」。
+          // 放行条件收得很紧：几乎全中 + 查询只有一两个词，避免长句里的零星撞词。
+          if (bodyCov >= 0.75 && qTok.size <= 2) {
+            topical += bodyCov * 1
+            evidence += 1 + freqBonus
+            why.push(`正文${Math.round(bodyCov * 100)}%(无标签)`)
+          }
         } else {
           topical += bodyCov * bodyWeight
-          evidence += 1
+          evidence += 1 + freqBonus
           why.push(`正文${Math.round(bodyCov * 100)}%`)
         }
       }
