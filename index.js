@@ -12,6 +12,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { applyWriteMode, noteReadHits } from './lib/write-mode.js'
 import { stem, stemForms } from './lib/stem.js'
+import { GENERIC_TAGS, PARENT_TAG, QUERY_LEXICON, STATUS_TAGS, queryTags } from './lib/lexicon.js'
+
+export { queryTags }
 
 const DEFAULT_MEMORY_DIR = path.join(
   process.env.USERPROFILE || process.env.HOME || '',
@@ -20,45 +23,8 @@ const DEFAULT_MEMORY_DIR = path.join(
 )
 
 // ── 检索词表 ─────────────────────────────────────────────
-// 查询词 → 标签。只收用户真的会说的词，不做同义猜测。
-const QUERY_LEXICON = {
-  卡牌: '卡牌', 打牌: '卡牌', 牌组: '卡牌', 做牌: '卡牌',
-  回合: '回合制',
-  造兵: 'RTS', 红警: 'RTS', 实时战略: 'RTS',
-  moba: 'MOBA', dota: 'MOBA', lol: 'MOBA', 峡谷: 'MOBA',
-  遥感: '遥感', 标注: '遥感', 鱼塘: '遥感', 水产: '遥感',
-  论文: '论文', 综述: '论文', 学术: '学术',
-  游戏: '游戏', 做游戏: '游戏',
-  项目: '项目', 在做的: '项目',
-  聊天: '聊天', 写作: '聊天',
-  工具: '工具',
-  梯子: '代理', 代理: '代理',
-  上不了网: '网络', 网络: '网络',
-  渠道: '渠道', key: '渠道', 换个key: '渠道', 换key: '渠道',
-  模型: '模型',
-  记忆: '记忆维护', 记忆库: '记忆维护', 维护记忆: '记忆维护',
-  '记住': '记忆维护', '记一下': '记忆维护', '记下来': '记忆维护', '记着': '记忆维护',
-  清理: '清理', 卸载: '清理', 删: '清理',
-  命令: '命令', 脚本: '命令',
-  日志: '取证', 取证: '取证',
-  崩: '急救', 报错: '急救', 打不开: '急救', 坏了: '急救', 起不来: '急救',
-  插件: '插件开发',
-  // 软件名：问到具体软件装在哪，几乎都是查 03-software
-  软件名: '软件', sublime: '软件', matlab: '软件', arcgis: '软件',
-  装在: '软件', 装哪: '软件', 安装位置: '软件',
-  // git 身份与操作规范在 02-preferences
-  git: '偏好', 提交: '偏好', 邮箱: '偏好',
-  // GitHub 账号 / 凭据 / 推送 / 建仓在 06-ai-toolchain「子智能体插件与执行环境」
-  github: 'GitHub', 推送: 'GitHub', 仓库: 'GitHub', 建仓: 'GitHub',
-}
-
-// 父标签（子 → 父）。显式声明，不靠猜。
-const PARENT_TAG = {
-  卡牌: '游戏', RTS: '游戏', MOBA: '游戏', 回合制: '游戏',
-  游戏: '项目', 学术: '项目', 工具: '项目',
-  渠道: 'AI工具', 模型: 'AI工具', 路由: 'AI工具', 子代理: 'AI工具',
-  代理: '网络',
-}
+// 词表、父标签、泛标签、queryTags 都在 lib/lexicon.js —— 写入侧（appendToMemory
+// 补章节标签）要用同一套，留在这里会让 write-mode.js 反向 import 成环。
 
 // 库级标签：查表失败时按文件名前缀兜底（新增 04x / 10b 类文件不必改这里）。
 // 不从正文自动抽 —— 正文里什么词都出现过，自动抽会把偶然当本质。
@@ -126,11 +92,7 @@ function libTagsOf(stem, libTitle, sectionTitles) {
 const PROGRESS_INTENT = /做到哪|进度|怎么样了|什么状态|还差|没做完|还活着吗/
 const DONE_INTENT = /做完了吗|结了|交付|完成没/
 
-// 泛标签（父类）：命中只证明「大类对」，不该压过具体标签。
-const GENERIC_TAGS = new Set(['项目', '游戏', '工具', '学术', 'AI工具', '网络'])
-
-// 状态标签：只作意图微调，不参与主要排序。
-const STATUS_TAGS = new Set(['进行中', '已结项', '搁置'])
+// 泛标签 / 状态标签的定义已移到 lib/lexicon.js（写入侧也要用同一套）。
 
 // 助手自用的工作笔记：不是用户知识的检索目标，降权而非排除。
 const LOW_PRIORITY_LIBS = new Set(['01-profile'])
@@ -502,30 +464,7 @@ export function deriveIndex(memoryDir) {
 
 // ── 检索 ────────────────────────────────────────────────
 
-/** 从一句话里抽标签，并补父标签。 */
-export function queryTags(query) {
-  // 长词优先，命中过的片段先挖掉再匹配短词。
-  // 为什么：词表是子串匹配，"github" 里含 "git" —— 不挖掉就会把 GitHub 误标成「偏好」，
-  // 而「偏好」是 02-preferences 的库级标签（+4 分），会把真正对口的 06 号库彻底压死。
-  let rest = String(query || '').toLowerCase()
-  const tags = new Set()
-  for (const word of Object.keys(QUERY_LEXICON).sort((a, b) => b.length - a.length)) {
-    if (!rest.includes(word)) continue
-    tags.add(QUERY_LEXICON[word])
-    rest = rest.split(word).join('\u0000')
-  }
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const [child, parent] of Object.entries(PARENT_TAG)) {
-      if (tags.has(child) && !tags.has(parent)) {
-        tags.add(parent)
-        changed = true
-      }
-    }
-  }
-  return tags
-}
+// queryTags 在 lib/lexicon.js（写入侧也要用），顶部已 re-export。
 
 /**
  * 多维交叉打分。
