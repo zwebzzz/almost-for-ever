@@ -48,6 +48,8 @@ const QUERY_LEXICON = {
   装在: '软件', 装哪: '软件', 安装位置: '软件',
   // git 身份与操作规范在 02-preferences
   git: '偏好', 提交: '偏好', 邮箱: '偏好',
+  // GitHub 账号 / 凭据 / 推送 / 建仓在 06-ai-toolchain「子智能体插件与执行环境」
+  github: 'GitHub', 推送: 'GitHub', 仓库: 'GitHub', 建仓: 'GitHub',
 }
 
 // 父标签（子 → 父）。显式声明，不靠猜。
@@ -468,10 +470,15 @@ export function deriveIndex(memoryDir) {
 
 /** 从一句话里抽标签，并补父标签。 */
 export function queryTags(query) {
-  const lower = String(query || '').toLowerCase()
+  // 长词优先，命中过的片段先挖掉再匹配短词。
+  // 为什么：词表是子串匹配，"github" 里含 "git" —— 不挖掉就会把 GitHub 误标成「偏好」，
+  // 而「偏好」是 02-preferences 的库级标签（+4 分），会把真正对口的 06 号库彻底压死。
+  let rest = String(query || '').toLowerCase()
   const tags = new Set()
-  for (const [word, tag] of Object.entries(QUERY_LEXICON)) {
-    if (lower.includes(word)) tags.add(tag)
+  for (const word of Object.keys(QUERY_LEXICON).sort((a, b) => b.length - a.length)) {
+    if (!rest.includes(word)) continue
+    tags.add(QUERY_LEXICON[word])
+    rest = rest.split(word).join('\u0000')
   }
   let changed = true
   while (changed) {
