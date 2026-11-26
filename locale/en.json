@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Almost For Ever",
-    "description": "Live memory index and visual workbench: ranks tags and body text each turn and injects only matching entries. Open “🗂 记忆库” in the corner for a library atlas with cross-library search, reading, section and entry editing, version-conflict protection, and snapshot undo. Model-proposed writes still require sticky-note confirmation. Reads and writes only local memory files and AGENTS.md."
+    "description": "Persistent memory and a local Markdown knowledge base for DSH. Automatically recalls relevant notes on every turn with tag, title and body ranking, injecting only matching line ranges. Open “🗂 记忆库” for full-text search and a visual atlas centered on AGENTS.md: read, add, edit and delete entries and sections with version-conflict protection and snapshot undo. Model-proposed writes still require sticky-note confirmation. No database, embedding service or hand-maintained index; reads and writes only local memory files and AGENTS.md."
   }
 }

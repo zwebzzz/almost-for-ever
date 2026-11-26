@@ -1,8 +1,8 @@
 # Almost For Ever
 
-**Live memory index and visual workbench for DSH** —— 记忆的现场索引、精确检索、可视化编辑与便利贴写入。
+**Persistent memory and a local knowledge base for DSH, in plain Markdown** —— 本地长期记忆、个人知识库、全文检索与可视化编辑。
 
-索引不存盘：每次都从你的记忆文件结构现场派生。右下角「🗂 记忆库」打开馆藏地图，能检索、阅读、增删和修改；写入不靠猜：插件收集候选，你点一下才算数。
+让 DSH 每轮自动找回相关笔记，而不是把整本记忆塞进上下文。右下角「🗂 记忆库」打开以 AGENTS.md 为中心的馆藏地图，检索、阅读、增删修改都在一处；便利贴候选由你确认才写入。无需数据库、Embedding 服务或手写索引，只读写本地 Markdown 记忆文件与 AGENTS.md。
 
 ```
 包名：almost-for-ever        许可证：MIT        版本：0.7.0
