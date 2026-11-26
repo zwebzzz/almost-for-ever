@@ -84,11 +84,13 @@ window.__ModuleLoader__.load({
 
     const PALETTES = [
       { id: 'theme', name: '跟随主题', bg: null, fg: null, bd: null },
-      { id: 'blue', name: '海蓝', bg: 'rgba(23,105,214,0.14)', fg: '#0f5fcc', bd: 'rgba(23,105,214,0.55)' },
-      { id: 'violet', name: '雾紫', bg: 'rgba(112,72,196,0.15)', fg: '#6b45c2', bd: 'rgba(112,72,196,0.55)' },
-      { id: 'green', name: '苔绿', bg: 'rgba(24,122,78,0.15)', fg: '#17784c', bd: 'rgba(24,122,78,0.55)' },
-      { id: 'amber', name: '琥珀', bg: 'rgba(172,102,10,0.16)', fg: '#a5620a', bd: 'rgba(172,102,10,0.55)' },
-      { id: 'rose', name: '玫红', bg: 'rgba(178,40,88,0.14)', fg: '#ad2757', bd: 'rgba(178,40,88,0.55)' },
+      // 这几个 fg 特意取中等明度：浅底上够深、暗底上也够亮。
+      // 早先用的是 #0f5fcc 这类深色，暗色主题下压在深背景上几乎看不见。
+      { id: 'blue', name: '海蓝', bg: 'rgba(23,105,214,0.14)', fg: '#2f7ce0', bd: 'rgba(23,105,214,0.55)' },
+      { id: 'violet', name: '雾紫', bg: 'rgba(112,72,196,0.15)', fg: '#9070e0', bd: 'rgba(112,72,196,0.55)' },
+      { id: 'green', name: '苔绿', bg: 'rgba(24,122,78,0.15)', fg: '#2f9e6b', bd: 'rgba(24,122,78,0.55)' },
+      { id: 'amber', name: '琥珀', bg: 'rgba(172,102,10,0.16)', fg: '#cf8a2a', bd: 'rgba(172,102,10,0.55)' },
+      { id: 'rose', name: '玫红', bg: 'rgba(178,40,88,0.14)', fg: '#d0568a', bd: 'rgba(178,40,88,0.55)' },
     ]
 
     const SHAPES = [
@@ -969,367 +971,2018 @@ window.__ModuleLoader__.load({
       return { tree, err, loading, reload: load }
     }
 
-    function TreePanel({ onClose, look, setLook, startLook }) {
+    // ── 记忆库面板（两层）─────────────────────────────────
+    //
+    // ① 总览 = 馆藏地图：中央是 AGENTS.md（主文档），四周是各库，面积按体积分档。
+    //    摆位是确定性的 —— 中央常驻第一位，其余按体积降序。不随机、不按命中频率漂移
+    //    （那样每次打开位置都不一样，就认不出「我的库」了）。
+    //    唯一会改顺序的动作是「拖一张卡到另一张卡上」，存在本机 localStorage。
+    // ② 库内 = 阅读器：左边章节栏、右边正文，能检索、能改一节、能加减章节与条目。
+    //
+    // 两条铁律：
+    //   · 所有写操作都带版本指纹，服务端发现文件被别处改过就回 conflict，
+    //     **绝不静默覆盖** —— 记忆库被悄悄盖掉是不可接受的损失；
+    //   · 座位里任何 throw 都会让控件静默消失，所以整块 try 包裹，出错返回 null。
+
+    const ATLAS_ORDER_KEY = 'almost-for-ever:atlas-order'
+
+    const PANEL = {
+      overlay: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 80,
+        background: 'var(--dsw-alias-scrim, rgba(0,0,0,0.38))',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 10,
+      },
+      box: {
+        width: 'min(1180px, 94vw)',
+        height: 'min(90vh, 900px)',
+        display: 'flex',
+        flexDirection: 'column',
+        background: TH.bg,
+        color: TH.fg,
+        border: `1px solid ${TH.border}`,
+        borderRadius: 14,
+        boxShadow: '0 24px 60px var(--dsw-alias-shadow, rgba(0,0,0,0.30))',
+        overflow: 'hidden',
+        fontSize: 12,
+      },
+      head: {
+        padding: '10px 14px',
+        borderBottom: `1px solid ${TH.border}`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexShrink: 0,
+        flexWrap: 'wrap',
+      },
+      input: {
+        background: TH.bg2,
+        color: TH.fg,
+        border: `1px solid ${TH.border2}`,
+        borderRadius: 6,
+        padding: '4px 8px',
+        fontSize: 11,
+        fontFamily: 'inherit',
+        outline: 'none',
+      },
+    }
+
+    // 面板自己的小按钮：btn() 带 marginRight/marginTop，在 flex + gap 里会错位
+    const sb = (tone) => ({
+      cursor: 'pointer',
+      border: `1px solid ${tone ? TH.ok : TH.border2}`,
+      background: 'transparent',
+      color: tone ? TH.ok : TH.fg2,
+      borderRadius: 8,
+      padding: '4px 10px',
+      fontSize: 11.5,
+      fontFamily: 'inherit',
+      lineHeight: '16px',
+      whiteSpace: 'nowrap',
+    })
+
+    // 头部的小信息片：一行灰字太轻，几个胶囊能立刻读出「多少、多大」
+    const chip = () => ({
+      fontSize: 10,
+      lineHeight: '18px',
+      padding: '0 7px',
+      borderRadius: 999,
+      border: `1px solid ${TH.border}`,
+      color: TH.fg2,
+      whiteSpace: 'nowrap',
+    })
+
+    const MD = {
+      p: { margin: '0 0 8px', lineHeight: 1.75, fontSize: 12.5 },
+      h: {
+        1: { fontSize: 17, fontWeight: 600, margin: '14px 0 8px' },
+        2: { fontSize: 15, fontWeight: 600, margin: '14px 0 8px' },
+        3: { fontSize: 13.5, fontWeight: 600, margin: '12px 0 6px' },
+        4: { fontSize: 12.5, fontWeight: 600, margin: '10px 0 6px' },
+        5: { fontSize: 12, fontWeight: 600, margin: '10px 0 6px' },
+      },
+      list: { margin: '0 0 8px', paddingLeft: 18, lineHeight: 1.75, fontSize: 12.5 },
+      code: {
+        background: TH.bg2,
+        borderRadius: 4,
+        padding: '0 4px',
+        fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+        fontSize: 11.5,
+      },
+      pre: {
+        background: TH.bg1,
+        border: `1px solid ${TH.border}`,
+        borderRadius: 8,
+        padding: '10px 12px',
+        overflowX: 'auto',
+        fontSize: 11.5,
+        lineHeight: 1.6,
+        fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+        margin: '0 0 10px',
+      },
+      quote: {
+        borderLeft: `3px solid ${TH.border2}`,
+        paddingLeft: 10,
+        margin: '0 0 10px',
+        color: TH.fg2,
+        fontSize: 12,
+        lineHeight: 1.7,
+      },
+      table: { borderCollapse: 'collapse', margin: '0 0 12px', fontSize: 11.5 },
+      th: {
+        border: `1px solid ${TH.border}`,
+        padding: '4px 8px',
+        background: TH.bg1,
+        textAlign: 'left',
+        fontWeight: 600,
+      },
+      td: { border: `1px solid ${TH.border}`, padding: '4px 8px', verticalAlign: 'top' },
+      link: { color: TH.brand, textDecoration: 'underline' },
+      hr: { border: 'none', borderTop: `1px solid ${TH.border}`, margin: '14px 0' },
+      del: {
+        cursor: 'pointer',
+        border: `1px solid ${TH.border2}`,
+        background: 'transparent',
+        color: TH.warn,
+        borderRadius: 4,
+        fontSize: 9.5,
+        lineHeight: '13px',
+        padding: '0 4px',
+        marginLeft: 6,
+      },
+    }
+
+    // 体积分档：√(本库 / 中位数)。记忆库体积差十倍是常态，
+    // 线性分档下九成的库会挤进最小一档，地图就没有「大小不一」可言了。
+    // 阈值宁高勿低：中间档一多，墙面上全是宽卡，节奏就散了。
+    function sizeClass(tokens, median) {
+      const r = Math.sqrt(Math.max(tokens, 1) / Math.max(median, 1))
+      if (r >= 1.9) return 'L'
+      if (r >= 1.02) return 'M'
+      return 'S'
+    }
+
+    function medianOf(list) {
+      const a = list.slice().sort((x, y) => x - y)
+      if (!a.length) return 1
+      const m = a.length >> 1
+      return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2
+    }
+
+    function readOrder() {
       try {
-        const { tree, err, loading, reload } = useTree(true)
-        const [expanded, setExpanded] = React.useState({})
-        const [query, setQuery] = React.useState('')
-        const [lookOpen, setLookOpen] = React.useState(Boolean(startLook))
-        const setLookNow = setLook || (() => {})
-        const cur = look || LOOK_DEFAULT
+        const raw = window.localStorage.getItem(ATLAS_ORDER_KEY)
+        const arr = raw ? JSON.parse(raw) : []
+        return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
+      } catch {
+        return []
+      }
+    }
 
-        const libs = (tree && tree.libs) || []
-        const filtered = query
-          ? libs.filter(
-              (l) =>
-                l.stem.includes(query) ||
-                l.label.includes(query) ||
-                l.sections.some((s) => s.title.includes(query)),
+    function writeOrder(arr) {
+      try {
+        window.localStorage.setItem(ATLAS_ORDER_KEY, JSON.stringify(arr.slice(0, 300)))
+      } catch {
+        /* 存不进也得能用 */
+      }
+    }
+
+    /** 按记住的顺序排；没记过的按体积降序补在后面。 */
+    function orderLibs(libs, order) {
+      const by = new Map(libs.map((l) => [l.stem, l]))
+      const out = []
+      for (const stem of order) {
+        const l = by.get(stem)
+        if (l) {
+          out.push(l)
+          by.delete(stem)
+        }
+      }
+      const rest = libs.filter((l) => by.has(l.stem)).sort((a, b) => b.tokens - a.tokens)
+      return out.concat(rest)
+    }
+
+    /** 按 `## ` 切节。跟服务端 doc-store 的口径逐字一致（行号 1 起）。 */
+    function splitDocText(content) {
+      // 记忆库的文件是 CRLF 存的。不先抹掉 \r，行尾会挂着一个空格，
+      // 行号对得上但标题/正文里都带隐藏字符 —— 后面按行匹配全都不准。
+      const lines = String(content || '').replace(/\r\n?/g, '\n').split('\n')
+      const marks = []
+      for (let i = 0; i < lines.length; i += 1) {
+        if (lines[i].startsWith('## ')) marks.push(i)
+      }
+      const sections = marks.map((start, i) => {
+        const end = i + 1 < marks.length ? marks[i + 1] : lines.length
+        const body = lines.slice(start, end).join('\n')
+        let entries = 0
+        for (let j = start + 1; j < end; j += 1) {
+          if (/^\s*[-*] /.test(lines[j])) entries += 1
+        }
+        return {
+          i,
+          title: lines[start].slice(3).trim(),
+          line: start + 1,
+          start,
+          end,
+          endLine: end,
+          tokens: Math.max(1, Math.round(body.length / 1.5)),
+          entries,
+        }
+      })
+
+      // 第一个 `## ` 之前的内容不属于任何一节。不单独成节的话，
+      // 中央 AGENTS.md 开头的「铁律」既看不到也改不了 —— 那恰恰是最该看的部分。
+      // 只写了一行 `# 标题` 的不算内容，不凭空造一节。
+      const headEnd = marks.length ? marks[0] : lines.length
+      const headBytes = lines.slice(0, headEnd)
+      const hasHead = headBytes.some((l, k) => l.trim() && !(k === 0 && /^#\s/.test(l)))
+      if (hasHead) {
+        const body = headBytes.join('\n')
+        sections.unshift({
+          i: 0,
+          head: true,
+          title: '前言',
+          line: 1,
+          start: 0,
+          end: headEnd,
+          endLine: headEnd,
+          tokens: Math.max(1, Math.round(body.length / 1.5)),
+          entries: 0,
+        })
+        sections.forEach((s, k) => {
+          s.i = k
+        })
+      }
+      return { lines, sections }
+    }
+
+    function countHits(text, lowerQuery) {
+      if (!lowerQuery) return 0
+      const lower = String(text || '').toLowerCase()
+      let n = 0
+      let at = 0
+      while (true) {
+        const i = lower.indexOf(lowerQuery, at)
+        if (i < 0) break
+        n += 1
+        at = i + lowerQuery.length
+      }
+      return n
+    }
+
+    /** 把一段 Markdown 换成 React 节点。只覆盖记忆库真会用到的那几种语法。 */
+    function mdInline(text, key0) {
+      const out = []
+      const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*[^*\n]+\*)/g
+      let at = 0
+      let m
+      let k = 0
+      while ((m = re.exec(text))) {
+        if (m.index > at) out.push(text.slice(at, m.index))
+        const tok = m[0]
+        const key = `${key0}-${k++}`
+        if (tok.startsWith('**')) {
+          out.push(h('strong', { key }, tok.slice(2, -2)))
+        } else if (tok.startsWith('`')) {
+          out.push(h('code', { key, style: MD.code }, tok.slice(1, -1)))
+        } else if (tok.startsWith('[')) {
+          const mm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok)
+          out.push(
+            h(
+              'a',
+              { key, href: mm[2], target: '_blank', rel: 'noreferrer', style: MD.link },
+              mm[1],
+            ),
+          )
+        } else {
+          out.push(h('em', { key }, tok.slice(1, -1)))
+        }
+        at = m.index + tok.length
+      }
+      if (at < text.length) out.push(text.slice(at))
+      return out
+    }
+
+    function mdTable(rows, key, onDel) {
+      const split = (t) => {
+        let s = String(t).trim()
+        if (s.startsWith('|')) s = s.slice(1)
+        if (s.endsWith('|')) s = s.slice(0, -1)
+        return s.split('|').map((x) => x.trim())
+      }
+      // 分隔行必须整行都是 |---+---| 这种形状。早先只判「含 -」，
+      // 结果 2026-11-26、04-projects 这类正文行被当成分隔行整行丢掉。
+      const isSep = (t) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(t)
+      const head = split(rows[0].text)
+      const body = rows.slice(1).filter((r) => !isSep(r.text))
+      return h(
+        'table',
+        { key: `t${key}`, style: MD.table },
+        h(
+          'thead',
+          null,
+          h(
+            'tr',
+            null,
+            ...head.map((c, i) => h('th', { key: i, style: MD.th }, ...mdInline(c, `th${key}${i}`))),
+            onDel ? h('th', { style: { border: 'none' } }) : null,
+          ),
+        ),
+        h(
+          'tbody',
+          null,
+          ...body.map((r, ri) =>
+            h(
+              'tr',
+              { key: ri },
+              ...split(r.text).map((c, ci) =>
+                h('td', { key: ci, style: MD.td }, ...mdInline(c, `td${key}${ri}${ci}`)),
+              ),
+              onDel
+                ? h(
+                    'td',
+                    { style: { border: 'none', padding: 0 } },
+                    h(
+                      'button',
+                      { type: 'button', title: '删除这一行', onClick: () => onDel(r.line), style: MD.del },
+                      '✕',
+                    ),
+                  )
+                : null,
+            ),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * 渲染正文。base = 这段第一行在文件里的行号 ——
+     * 「整理」模式下每行旁边要能删，就必须知道它对应文件里哪一行。
+     */
+    function renderMd(text, base, onDel) {
+      // 统一按 LF 处理：文件是 CRLF 存的，行尾那个 \r 会让
+      // `^(#{1,6})\s+(.*)$` 这种「到行尾」的正则整条失配 —— 曾经因此死循环。
+      const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+      const out = []
+      let i = 0
+      let key = 0
+      const LM = /^(\s*)([-*+]|\d+[.)])\s+/
+
+      while (i < lines.length) {
+        const raw = lines[i]
+        if (!raw.trim()) {
+          i += 1
+          continue
+        }
+
+        // `<!-- 标签: ... -->` 是给插件建索引用的，不是给人读的正文 ——
+        // 每个 `##` 下面都有一行，原样显示就成了满屏生注释。
+        if (/^\s*<!--/.test(raw)) {
+          let j = i
+          while (j < lines.length && !/-->\s*$/.test(lines[j])) j += 1
+          i = j + 1
+          continue
+        }
+
+        if (/^\s*```/.test(raw)) {
+          const buf = []
+          i += 1
+          while (i < lines.length && !/^\s*```/.test(lines[i])) {
+            buf.push(lines[i])
+            i += 1
+          }
+          i += 1
+          out.push(h('pre', { key: `k${key++}`, style: MD.pre }, h('code', null, buf.join('\n'))))
+          continue
+        }
+
+        if (/^\s*\|/.test(raw)) {
+          const rows = []
+          while (i < lines.length && /^\s*\|/.test(lines[i])) {
+            rows.push({ text: lines[i], line: base + i })
+            i += 1
+          }
+          out.push(mdTable(rows, key++, onDel))
+          continue
+        }
+
+        if (/^\s*([-*_])\1{2,}\s*$/.test(raw)) {
+          out.push(h('hr', { key: `k${key++}`, style: MD.hr }))
+          i += 1
+          continue
+        }
+
+        const hm = /^(#{1,6})\s+(.*)$/.exec(raw)
+        if (hm) {
+          const lv = Math.min(5, hm[1].length)
+          out.push(h(`h${lv + 1}`, { key: `k${key++}`, style: MD.h[lv] }, ...mdInline(hm[2], `h${key}`)))
+          i += 1
+          continue
+        }
+
+        if (/^\s*>\s?/.test(raw)) {
+          const buf = []
+          while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+            buf.push(lines[i].replace(/^\s*>\s?/, ''))
+            i += 1
+          }
+          out.push(h('blockquote', { key: `k${key++}`, style: MD.quote }, ...mdInline(buf.join(' '), `q${key}`)))
+          continue
+        }
+
+        if (LM.test(raw)) {
+          const ordered = /^\s*\d+[.)]\s+/.test(raw)
+          const items = []
+          while (i < lines.length) {
+            const m2 = LM.exec(lines[i])
+            if (!m2) {
+              // 续行：非空、有缩进、不是新条目
+              if (items.length && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
+                items[items.length - 1].text += ' ' + lines[i].trim()
+                i += 1
+                continue
+              }
+              break
+            }
+            items.push({ indent: m2[1].length, text: lines[i].slice(m2[0].length), line: base + i })
+            i += 1
+          }
+          const kk = key++
+          out.push(
+            h(
+              ordered ? 'ol' : 'ul',
+              { key: `k${kk}`, style: MD.list },
+              ...items.map((it, j) =>
+                h(
+                  'li',
+                  { key: j, style: { marginLeft: Math.min(it.indent, 8) * 2 } },
+                  ...mdInline(it.text, `l${kk}-${j}`),
+                  onDel
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          title: '删除这一行',
+                          onClick: () => onDel(it.line),
+                          style: MD.del,
+                        },
+                        '✕',
+                      )
+                    : null,
+                ),
+              ),
+            ),
+          )
+          continue
+        }
+
+        const buf = []
+        const pStart = i
+        while (
+          i < lines.length &&
+          lines[i].trim() &&
+          !/^#{1,6}\s/.test(lines[i]) &&
+          !/^\s*```/.test(lines[i]) &&
+          !/^\s*\|/.test(lines[i]) &&
+          !/^\s*>\s?/.test(lines[i]) &&
+          !/^\s*<!--/.test(lines[i]) &&
+          !LM.test(lines[i])
+        ) {
+          buf.push(lines[i])
+          i += 1
+        }
+        // 兜底：万一某一行把上面的分支全躲过去、又过不了这个 while，
+        // buf 就是空的 —— 那 i 永远不动，整个界面直接卡死（真出过）。
+        // 宁可原样吐一行，也必须往前走。
+        if (!buf.length) {
+          out.push(h('p', { key: `k${key++}`, style: MD.p }, raw))
+          i += 1
+          continue
+        }
+        // 整理模式按「原始行」出 ✕：段落常常由几行折成一段，
+        // 整段一个删除键就删多了，也看不出删的是哪一行。
+        if (onDel) {
+          for (let k2 = 0; k2 < buf.length; k2 += 1) {
+            out.push(
+              h(
+                'p',
+                { key: `k${key++}`, style: MD.p },
+                ...mdInline(buf[k2], `p${key}`),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    title: '删除这一行',
+                    onClick: () => onDel(base + pStart + k2),
+                    style: MD.del,
+                  },
+                  '✕',
+                ),
+              ),
             )
-          : libs
+          }
+        } else {
+          out.push(h('p', { key: `k${key++}`, style: MD.p }, ...mdInline(buf.join(' '), `p${key}`)))
+        }
+      }
+      return out
+    }
 
-        const total = tree ? tree.totalTokens : 0
-        const biggest = libs.slice().sort((a, b) => b.tokens - a.tokens).slice(0, 5)
+    function mergeSectionText(content, sec, text) {
+      const lines = String(content || '').split('\n')
+      if (!sec) return text
+      return lines
+        .slice(0, sec.start)
+        .concat(text.split('\n'), lines.slice(sec.end))
+        .join('\n')
+    }
 
-        return h(
+    function docTitleOf(content, stem) {
+      if (stem === 'AGENTS') return '中央记忆'
+      const m = /^#\s+(.+)$/m.exec(String(content || ''))
+      return m ? m[1].trim() : stem
+    }
+
+    function LookPanel({ cur, setLookNow }) {
+      return h(
+        'div',
+        {
+          style: {
+            padding: '8px 14px 10px',
+            borderBottom: `1px solid ${TH.border}`,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            background: TH.bg1,
+            flexShrink: 0,
+          },
+        },
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+          h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '颜色'),
+          ...PALETTES.map((p) =>
+            h('button', {
+              key: p.id,
+              type: 'button',
+              title: p.name,
+              onClick: () => setLookNow({ color: p.id }),
+              style: {
+                cursor: 'pointer',
+                width: 22,
+                height: 22,
+                borderRadius: 999,
+                padding: 0,
+                background: p.bd || TH.bg2,
+                border: cur.color === p.id ? '2px solid ' + TH.fg : '1px solid ' + TH.border2,
+              },
+            }),
+          ),
+          h(
+            'span',
+            { style: { color: TH.fg2, fontSize: 11 } },
+            (PALETTES.find((p) => p.id === cur.color) || PALETTES[0]).name,
+          ),
+        ),
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+          h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '形状'),
+          ...SHAPES.map((s) =>
+            h(
+              'button',
+              {
+                key: s.id,
+                type: 'button',
+                title: s.name,
+                onClick: () => setLookNow({ shape: s.id }),
+                style: Object.assign({}, sb(), {
+                  color: cur.shape === s.id ? TH.ok : TH.fg2,
+                  borderColor: cur.shape === s.id ? TH.ok : TH.border2,
+                }),
+              },
+              s.name,
+            ),
+          ),
+          h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '大小'),
+          ...SIZES.map((s) =>
+            h(
+              'button',
+              {
+                key: s.id,
+                type: 'button',
+                title: s.name,
+                onClick: () => setLookNow({ size: s.id }),
+                style: Object.assign({}, sb(), {
+                  color: cur.size === s.id ? TH.ok : TH.fg2,
+                  borderColor: cur.size === s.id ? TH.ok : TH.border2,
+                }),
+              },
+              s.name,
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+          h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '位置'),
+          h(
+            'button',
+            { type: 'button', style: sb(), onClick: () => setLookNow({ pos: {} }) },
+            '复位到右下角',
+          ),
+          h(
+            'span',
+            { style: { color: TH.fg2, fontSize: 11 } },
+            '按住圆片拖即可移动，位置会记住；右键圆片可直接打开这里。',
+          ),
+        ),
+      )
+    }
+
+    function CentralCard({ central, onOpen, place, wide }) {
+      const secs = (central.sections || []).filter((s) => s.title).slice(0, 3)
+      const faint = 'rgba(255,255,255,0.70)'
+      return h(
+        'button',
+        {
+          type: 'button',
+          onClick: () => onOpen(central.stem, 0),
+          title: '中央记忆：~/.dsh/AGENTS.md —— 每轮自动加载，所以在总览里常驻中间',
+          style: Object.assign(
+            {
+              gridColumn: 'span 2',
+              gridRow: 'span 2',
+              position: 'relative',
+              display: 'flex',
+              flexDirection: wide ? 'row' : 'column',
+              gap: wide ? 18 : 0,
+              alignItems: 'stretch',
+              textAlign: 'left',
+              font: 'inherit',
+              color: '#f7faff',
+              cursor: 'pointer',
+              overflow: 'hidden',
+              // 中央记忆是封面，不是另一张库卡。品牌色压进深墨底，
+              // 明暗主题下都保持同一种「主文档」识别；不支持 color-mix 时退回品牌色。
+              background: TH.brand,
+              backgroundImage:
+                'linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 42%, #17263d) 0%, color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, #17263d) 100%)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              borderRadius: 14,
+              padding: '14px 15px',
+              boxShadow: '0 10px 26px rgba(30,50,80,0.16)',
+            },
+            place || null,
+          ),
+        },
+        h(
+          'span',
+          {
+            style: {
+              position: 'absolute',
+              right: 12,
+              top: 5,
+              fontSize: 82,
+              fontWeight: 700,
+              lineHeight: 1,
+              color: 'rgba(255,255,255,0.07)',
+              pointerEvents: 'none',
+            },
+          },
+          'A',
+        ),
+        h(
           'div',
           {
             style: {
-              position: 'fixed',
-              inset: 0,
-              zIndex: 80,
-              background: 'rgba(0,0,0,0.35)',
+              position: 'relative',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            },
-            onClick: (e) => {
-              if (e.target === e.currentTarget) onClose()
+              flex: wide ? 1 : 'initial',
+              alignItems: 'flex-start',
+              gap: 8,
             },
           },
           h(
             'div',
-            {
-              style: {
-                width: 'min(720px, 92vw)',
-                maxHeight: '82vh',
-                display: 'flex',
-                flexDirection: 'column',
-                background: TH.bg,
-                color: TH.fg,
-                border: `1px solid ${TH.border}`,
-                borderRadius: 14,
-                boxShadow: '0 18px 48px rgba(0,0,0,0.28)',
-                overflow: 'hidden',
-              },
-            },
-            // 头部
+            null,
             h(
               'div',
               {
                 style: {
-                  padding: '12px 16px',
-                  borderBottom: `1px solid ${TH.border}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
+                  fontSize: 9,
+                  letterSpacing: 1.4,
+                  color: faint,
+                  fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
                 },
               },
-              h('strong', { style: { fontSize: 14, flex: 1 } }, '记忆库结构'),
+              'AGENTS.md',
+            ),
+            h('div', { style: { fontSize: 20, fontWeight: 650, letterSpacing: 0.5, marginTop: 8 } }, '中央记忆'),
+            h('div', { style: { fontSize: 10.5, color: faint, marginTop: 4 } }, '全局规则与记忆入口'),
+          ),
+          h('span', { style: { flex: 1 } }),
+          h(
+            'span',
+            {
+              style: {
+                fontSize: 9,
+                color: faint,
+                border: '1px solid rgba(255,255,255,0.20)',
+                borderRadius: 999,
+                padding: '2px 7px',
+                whiteSpace: 'nowrap',
+              },
+            },
+            '每轮自动加载',
+          ),
+        ),
+        h(
+          'div',
+          {
+            style: {
+              position: 'relative',
+              marginTop: wide ? 0 : 'auto',
+              paddingTop: wide ? 0 : 12,
+              width: wide ? '42%' : 'auto',
+              paddingLeft: wide ? 16 : 0,
+              borderLeft: wide ? '1px solid rgba(255,255,255,0.14)' : 'none',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'flex-end',
+            },
+          },
+          h(
+            'div',
+            { style: { display: 'flex', gap: 7, fontSize: 10, color: faint, marginBottom: 8 } },
+            central.exists
+              ? h(
+                  React.Fragment,
+                  null,
+                  h('span', null, `${fmtTok(central.tokens)} tok`),
+                  h('span', null, '·'),
+                  h('span', null, `${central.sections.length} 节`),
+                )
+              : h('span', null, '还没有文件，点进来建立'),
+          ),
+          h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                flexWrap: wide ? 'wrap' : 'nowrap',
+                gap: 5,
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+              },
+            },
+            ...secs.map((s) =>
               h(
                 'span',
-                { style: { color: TH.fg2, fontSize: 11 } },
-                tree ? `${libs.length} 个库 · 约 ${fmtTok(total)} tok` : '',
+                {
+                  key: s.title,
+                  style: {
+                    fontSize: 9.5,
+                    color: faint,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    borderRadius: 6,
+                    padding: '2px 7px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  },
+                },
+                s.title,
+              ),
+            ),
+          ),
+        ),
+      )
+    }
+
+    // 色相跟着「用途」走，浓度跟着实际 token 体量走；渐变始终混回主题底色。
+    // 同一份记忆库颜色稳定，不随机换色；正文仍用主题前景色。
+    const LIB_TONES = [
+      { re: /^00/, color: '#ef7070', rgb: '239,112,112' },
+      { re: /^0[12]/, color: '#a875e6', rgb: '168,117,230' },
+      { re: /^03/, color: '#82bd55', rgb: '130,189,85' },
+      { re: /^05/, color: '#3cbc88', rgb: '60,188,136' },
+      { re: /^09/, color: '#28b8ae', rgb: '40,184,174' },
+      { re: /^04/, color: '#eda13c', rgb: '237,161,60' },
+      { re: /^06/, color: '#5a8ff2', rgb: '90,143,242' },
+      { re: /^07/, color: '#38b6db', rgb: '56,182,219' },
+      { re: /^11/, color: '#8578eb', rgb: '133,120,235' },
+      { re: /^10/, color: '#ed74a8', rgb: '237,116,168' },
+    ]
+    const toneOf = (stem) =>
+      LIB_TONES.find((t) => t.re.test(stem)) || {
+        color: '#72a9c6',
+        rgb: '114,169,198',
+      }
+
+    function LibCard({ lib, size, heat, onOpen, dragStem, setDragStem, swap }) {
+      const span =
+        size === 'L'
+          ? { gridColumn: 'span 2', gridRow: 'span 2' }
+          : size === 'M'
+            ? { gridColumn: 'span 2', gridRow: 'span 1' }
+            : { gridColumn: 'span 1', gridRow: 'span 1' }
+      const bare = size === 'S'
+      const tone = toneOf(lib.stem)
+      // 体量连续映射到色彩重量：最大的库最浓，小库只留一层淡彩，而不是只有三档。
+      const weight = typeof heat === 'number' ? heat : size === 'L' ? 0.85 : size === 'M' ? 0.5 : 0.18
+      const strong = Math.round(8 + weight * 30)
+      const soft = Math.round(3 + weight * 15)
+      const ink = `color-mix(in srgb, ${tone.color} 72%, ${TH.fg})`
+      const restingBorder = `rgba(${tone.rgb},${(0.16 + weight * 0.3).toFixed(2)})`
+      const secs = (lib.sections || []).filter((s) => !s.meta && s.title)
+      const listed = size === 'L' ? secs.slice(0, 5) : []
+      const chips = size === 'M' ? secs.slice(0, 2) : []
+      const border = (on) => (e) => {
+        e.currentTarget.style.borderColor = on ? tone.color : restingBorder
+        e.currentTarget.style.borderLeftColor = tone.color
+      }
+      return h(
+        'button',
+        {
+          type: 'button',
+          draggable: true,
+          onDragStart: (e) => {
+            setDragStem(lib.stem)
+            try {
+              e.dataTransfer.setData('text/plain', lib.stem)
+            } catch {
+              /* noop */
+            }
+          },
+          onDragEnd: () => setDragStem(''),
+          onDragOver: (e) => e.preventDefault(),
+          onDrop: (e) => {
+            e.preventDefault()
+            let from = dragStem
+            try {
+              from = from || e.dataTransfer.getData('text/plain')
+            } catch {
+              /* noop */
+            }
+            swap(from, lib.stem)
+            setDragStem('')
+          },
+          onClick: () => onOpen(lib.stem, 0),
+          onMouseEnter: border(true),
+          onMouseLeave: border(false),
+          title: `${lib.label} · ${lib.sections.length} 节 · 约 ${fmtTok(lib.tokens)} tok\n${lib.stem}.md\n拖动可以排序`,
+          style: Object.assign(
+            {
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'stretch',
+              textAlign: 'left',
+              font: 'inherit',
+              color: TH.fg,
+              cursor: 'pointer',
+              overflow: 'hidden',
+              // 颜色既分用途，也随实际 token 体量连续加深；混色始终落回主题底色。
+              backgroundColor: `rgba(${tone.rgb},${(0.03 + weight * 0.08).toFixed(2)})`,
+              backgroundImage: `linear-gradient(135deg, color-mix(in srgb, ${tone.color} ${strong}%, ${TH.bg1}) 0%, color-mix(in srgb, ${tone.color} ${soft}%, ${TH.bg1}) 100%)`,
+              border: `1px solid ${restingBorder}`,
+              borderLeft: `${3 + Math.round(weight * 2)}px solid ${tone.color}`,
+              borderRadius: 12,
+              padding: '10px 11px',
+              opacity: dragStem && dragStem !== lib.stem ? 0.4 : 1,
+            },
+            span,
+          ),
+        },
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+          h(
+            'span',
+            {
+              style: {
+                color: ink,
+                fontSize: bare ? 12 : 12.5,
+                fontWeight: size === 'L' ? 650 : 600,
+                lineHeight: 1.4,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              },
+            },
+            lib.label,
+          ),
+          h('span', { style: { flex: 1 } }),
+          h(
+            'span',
+            { style: { fontSize: 9.5, color: ink, whiteSpace: 'nowrap' } },
+            fmtTok(lib.tokens),
+          ),
+        ),
+        h(
+          'div',
+          {
+            style: {
+              fontSize: 9.5,
+              color: TH.fg2,
+              opacity: 0.65,
+              fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              marginTop: 1,
+            },
+          },
+          lib.stem,
+        ),
+        chips.length
+          ? h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  gap: 8,
+                  marginTop: 6,
+                  fontSize: 10,
+                  color: TH.fg2,
+                  overflow: 'hidden',
+                  whiteSpace: 'nowrap',
+                },
+              },
+              ...chips.map((s) =>
+                h(
+                  'span',
+                  {
+                    key: s.title,
+                    style: {
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      borderLeft: `1px solid ${tone.color}`,
+                      paddingLeft: 8,
+                    },
+                  },
+                  s.title,
+                ),
+              ),
+            )
+          : null,
+        listed.length
+          ? h(
+              'div',
+              { style: { marginTop: 7, display: 'flex', flexDirection: 'column', gap: 1 } },
+              ...listed.map((s) =>
+                h(
+                  'div',
+                  {
+                    key: s.title,
+                    style: {
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 6,
+                      fontSize: 10,
+                      lineHeight: '17px',
+                      color: TH.fg2,
+                      overflow: 'hidden',
+                    },
+                  },
+                  h(
+                    'span',
+                    { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    s.title,
+                  ),
+                  h('span', { style: { flex: 1, borderBottom: `1px dotted ${TH.border}`, transform: 'translateY(-3px)' } }),
+                  h('span', { style: { opacity: 0.7, whiteSpace: 'nowrap' } }, fmtTok(s.tokens || 0)),
+                ),
+              ),
+            )
+          : null,
+        h(
+          'div',
+          {
+            style: {
+              marginTop: 'auto',
+              paddingTop: 6,
+              fontSize: 9.5,
+              color: TH.fg2,
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 6,
+              whiteSpace: 'nowrap',
+            },
+          },
+          h('span', null, `${lib.sections.length} 节`),
+        ),
+      )
+    }
+
+    function AtlasMap({ central, libs, median, onOpen, dragStem, setDragStem, swap, reload }) {
+      // 注意：central 永远有值（文件不存在也是一个对象），
+      // 所以空态判断只能看 libs —— 否则新装的机器永远看不到起手模板。
+      const empty = !libs.length
+      const maxTokens = Math.max(1, ...libs.map((l) => l.tokens || 0))
+
+      // 主卡得落在正中间。grid 自动排是「行优先」，主卡作为第一项永远顶左上角，
+      // 跟「四周环绕」正好相反 —— 所以先量出一行能排几列，再显式指定位置。
+      const gridRef = React.useRef(null)
+      const [cols, setCols] = React.useState(0)
+      React.useLayoutEffect(() => {
+        const el = gridRef.current
+        if (!el) return undefined
+        const measure = () => {
+          const w = el.clientWidth
+          if (w > 0) setCols(Math.max(2, Math.floor((w + 10) / 152)))
+        }
+        measure()
+        if (typeof ResizeObserver === 'undefined') return undefined
+        const ro = new ResizeObserver(measure)
+        ro.observe(el)
+        return () => ro.disconnect()
+      }, [])
+      // 宽屏给中央主卡三条轨道，横向封面才装得下标题与章节入口；高度仍只占两行。
+      // 若「总列数 - 主卡列数」是奇数，就多预留一条轨道，再按 s/(s+1) 缩回视觉宽度，
+      // 通用公式 = 预留宽的 s/r - g/r（g=10px），保证奇偶列都真正居中。
+      const span = cols >= 7 ? 3 : cols >= 3 ? 2 : 1
+      const rowSpan = cols >= 3 ? 2 : 1
+      const needsPad = cols > span && (cols - span) % 2 === 1
+      const reserved = needsPad ? span + 1 : span
+      const place = cols
+        ? Object.assign(
+            {
+              gridColumn: `${Math.max(1, Math.floor((cols - reserved) / 2) + 1)} / span ${reserved}`,
+              gridRow: `2 / span ${rowSpan}`,
+            },
+            needsPad
+              ? {
+                  width: `calc(${(span / reserved) * 100}% - ${10 / reserved}px)`,
+                  justifySelf: 'center',
+                }
+              : null,
+          )
+        : null
+
+      return h(
+        'div',
+        { style: { flex: 1, overflowY: 'auto', padding: '16px 18px 18px' } },
+        h(
+          'div',
+          {
+            ref: gridRef,
+            style: {
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(142px, 1fr))',
+              gridAutoFlow: 'row dense',
+              gridAutoRows: '96px',
+              gap: 10,
+            },
+          },
+          central ? h(CentralCard, { key: 'central', central, onOpen, place, wide: span >= 3 }) : null,
+          ...libs.map((l) =>
+            h(LibCard, {
+              key: l.stem,
+              lib: l,
+              size: sizeClass(l.tokens, median),
+              heat: Math.sqrt((l.tokens || 0) / maxTokens),
+              onOpen,
+              dragStem,
+              setDragStem,
+              swap,
+            }),
+          ),
+        ),
+        empty
+          ? h(
+              'div',
+              {
+                style: {
+                  padding: '26px 8px 8px',
+                  textAlign: 'center',
+                  color: TH.fg2,
+                  fontSize: 12,
+                  lineHeight: 1.9,
+                },
+              },
+              h('div', null, '目录里还没有记忆库文件。'),
+              h('div', null, '可以一键生成一套起手模板，也可以自己放 markdown 文件进来。'),
+              h(StarterButtons, { onDone: reload }),
+            )
+          : h(
+              'div',
+              { style: { marginTop: 12, color: TH.fg2, fontSize: 10.5, lineHeight: 1.7 } },
+              '点卡片进库看正文；拖动一张卡到另一张卡上可以排序（只记在这台机器上）。',
+            ),
+      )
+    }
+
+    function HitList({ hits, onOpen }) {
+      if (hits === null) {
+        return h(
+          'div',
+          { style: { padding: 32, textAlign: 'center', color: TH.fg2, fontSize: 12 } },
+          '检索中…',
+        )
+      }
+      if (!hits.length) {
+        return h(
+          'div',
+          { style: { padding: 32, textAlign: 'center', color: TH.fg2, fontSize: 12, lineHeight: 1.8 } },
+          '没有命中。换个词试试 ——',
+          h('div', null, '这里用的是跟自动注入同一套打分，命中什么就说明真正喂给模型的是什么。'),
+        )
+      }
+      return h(
+        'div',
+        { style: { flex: 1, overflowY: 'auto', padding: '8px 14px 18px' } },
+        ...hits.map((hit, i) =>
+          h(
+            'div',
+            {
+              key: `${hit.stem}-${hit.line}-${i}`,
+              onClick: () => onOpen(hit.stem, hit.entry ? hit.entry.line : hit.line),
+              style: {
+                padding: '8px 10px',
+                borderBottom: `1px solid ${TH.border}`,
+                cursor: 'pointer',
+              },
+            },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              h('strong', { style: { fontSize: 12 } }, hit.label),
+              h(
+                'span',
+                { style: { color: TH.fg2, fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace' } },
+                `${hit.stem}:${hit.entry ? hit.entry.line : hit.line}`,
+              ),
+              h('span', { style: { flex: 1 } }),
+              ...(hit.why || []).slice(0, 4).map((w, j) =>
+                h(
+                  'span',
+                  {
+                    key: j,
+                    style: {
+                      color: TH.brand,
+                      fontSize: 9.5,
+                      border: `1px solid ${TH.border2}`,
+                      borderRadius: 999,
+                      padding: '0 5px',
+                      lineHeight: '14px',
+                    },
+                  },
+                  w,
+                ),
+              ),
+            ),
+            h(
+              'div',
+              { style: { fontSize: 11.5, marginTop: 3 } },
+              hit.entry ? `${hit.title} → ${String(hit.entry.head || '').slice(0, 60)}` : hit.title,
+            ),
+            hit.snippet
+              ? h(
+                  'div',
+                  { style: { fontSize: 10.5, color: TH.fg2, marginTop: 3, lineHeight: 1.6 } },
+                  hit.snippet,
+                )
+              : null,
+          ),
+        ),
+      )
+    }
+
+    function AtlasView({ tree, err, loading, reload, onOpen, lookOpen, setLookOpen, cur, setLookNow, onClose }) {
+      const libs = (tree && tree.libs) || []
+      const central = tree && tree.central
+      const [query, setQuery] = React.useState('')
+      const [hits, setHits] = React.useState(null)
+      const [order, setOrder] = React.useState(readOrder)
+      const [dragStem, setDragStem] = React.useState('')
+
+      const ordered = React.useMemo(() => orderLibs(libs, order), [libs, order])
+      const median = React.useMemo(() => medianOf(libs.map((l) => l.tokens || 0)), [libs])
+      const total = tree ? tree.totalTokens : 0
+
+      // 检索走服务端：260ms 防抖，别每敲一个字打一次
+      React.useEffect(() => {
+        const q = query.trim()
+        if (!q) {
+          setHits(null)
+          return undefined
+        }
+        let alive = true
+        const id = setTimeout(() => {
+          fetch(`${API}/search?q=${encodeURIComponent(q)}`, { credentials: 'same-origin' })
+            .then((r) => r.json())
+            .then((d) => {
+              if (alive) setHits(d && Array.isArray(d.hits) ? d.hits : [])
+            })
+            .catch(() => {
+              if (alive) setHits([])
+            })
+        }, 260)
+        return () => {
+          alive = false
+          clearTimeout(id)
+        }
+      }, [query])
+
+      const swap = (from, to) => {
+        if (!from || !to || from === to) return
+        const arr = ordered.map((l) => l.stem)
+        const i = arr.indexOf(from)
+        const j = arr.indexOf(to)
+        if (i < 0 || j < 0) return
+        arr.splice(i, 1)
+        arr.splice(j, 0, from)
+        writeOrder(arr)
+        setOrder(arr)
+      }
+
+      return h(
+        React.Fragment,
+        null,
+        h(
+          'div',
+          { style: Object.assign({}, PANEL.head, { padding: '11px 16px', gap: 9 }) },
+          h('strong', { style: { fontSize: 14, letterSpacing: 0.3 } }, '记忆库'),
+          tree
+            ? h(
+                'span',
+                { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                h('span', { style: chip() }, `${libs.length} 个库`),
+                h('span', { style: chip() }, `约 ${fmtTok(total)} tok`),
+              )
+            : h('span', { style: { color: TH.fg2, fontSize: 11 } }, '正在读取…'),
+          h('span', { style: { flex: 1 } }),
+          h('input', {
+            value: query,
+            placeholder: '搜记忆正文…',
+            onChange: (e) => setQuery(e.target.value),
+            style: Object.assign(
+              { width: 200, padding: '5px 9px', borderRadius: 8, fontSize: 11.5 },
+              PANEL.input,
+            ),
+          }),
+          h(
+            'button',
+            {
+              type: 'button',
+              style: sb(),
+              onClick: () => setLookOpen((v) => !v),
+              title: '圆片的形状 / 颜色 / 大小 / 位置',
+            },
+            lookOpen ? '⚙ 外观' : '⚙',
+          ),
+          h('button', { type: 'button', style: sb(), onClick: reload }, loading ? '…' : '刷新'),
+          h('button', { type: 'button', style: sb(), onClick: onClose }, '关闭'),
+        ),
+        lookOpen ? h(LookPanel, { cur, setLookNow }) : null,
+        err ? h('div', { style: { padding: '6px 14px', color: TH.warn, fontSize: 11 } }, err) : null,
+        !tree && !err
+          ? h(
+              'div',
+              { style: { padding: 40, textAlign: 'center', color: TH.fg2, fontSize: 12 } },
+              '读取中…',
+            )
+          : query.trim()
+            ? h(HitList, { hits, onOpen })
+            : h(AtlasMap, {
+                central,
+                libs: ordered,
+                median,
+                onOpen,
+                dragStem,
+                setDragStem,
+                swap,
+                reload,
+              }),
+      )
+    }
+    /**
+     * 库内视图：左边章节栏、右边正文。
+     * 三种模式 —— read（读）/ edit（改当前这一节）/ organize（整理，每行能删）。
+     * 只改当前这一节，而不是整个大文本框：改一节的风险面小得多。
+     */
+    function DocView({ stem, startLine, onBack, onChanged, onGuard }) {
+      const [data, setData] = React.useState(null)
+      const [err, setErr] = React.useState('')
+      const [active, setActive] = React.useState(0)
+      const [q, setQ] = React.useState('')
+      const [mode, setMode] = React.useState('read')
+      const [draft, setDraft] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [flash, setFlash] = React.useState('')
+      const [conflict, setConflict] = React.useState(null)
+      const [adding, setAdding] = React.useState(false)
+      const [newTitle, setNewTitle] = React.useState('')
+
+      const load = React.useCallback(async () => {
+        setBusy(true)
+        try {
+          const r = await fetch(`${API}/doc?stem=${encodeURIComponent(stem)}`, {
+            credentials: 'same-origin',
+          })
+          const d = await r.json()
+          if (!d || !d.ok) {
+            setErr((d && d.error) || '读不到这个库')
+          } else {
+            setErr('')
+            // 换了正文就必须退出编辑态：否则草稿还是旧的、版本却是新的，
+            // 一保存就把别处刚写的那一节静默盖掉。
+            setMode('read')
+            setDraft('')
+            setConflict(null)
+            setData(d)
+          }
+        } catch (e) {
+          setErr(String(e))
+        } finally {
+          setBusy(false)
+        }
+      }, [stem])
+
+      React.useEffect(() => {
+        load()
+      }, [load])
+
+      // 记忆库的文件是 CRLF 存的。视图里统一按 LF 算行，存回去再换回 CRLF ——
+      // 不然一次保存就把整篇的换行符悄悄改了，diff 全是噪音。
+      const srcText = data ? String(data.content || '').replace(/\r\n?/g, '\n') : ''
+      const usesCRLF = Boolean(data && /\r\n/.test(String(data.content || '')))
+      const parsed = React.useMemo(() => splitDocText(srcText), [srcText])
+      const sections = parsed.sections
+      const curSec = sections.length ? sections[Math.min(active, sections.length - 1)] : null
+
+      // 从检索结果点进来时，跳到命中那一节。只跳一次 ——
+      // 之后每次保存都会换一份 sections，不能把用户手动选的节顶回去。
+      const jumped = React.useRef(false)
+      React.useEffect(() => {
+        if (jumped.current || !startLine || !sections.length) return
+        jumped.current = true
+        const i = sections.findIndex((s) => startLine >= s.line && startLine <= s.endLine)
+        if (i >= 0) setActive(i)
+      }, [sections, startLine])
+
+      React.useEffect(() => {
+        if (!flash) return undefined
+        const id = setTimeout(() => setFlash(''), 5000)
+        return () => clearTimeout(id)
+      }, [flash])
+
+      /**
+       * 保存。永远带版本指纹 —— 服务端对不上就回 conflict，
+       * 这时候把选择权交给用户，而不是替他决定「谁赢」。
+       */
+      const save = React.useCallback(
+        async (content, note, version) => {
+          if (!data) return null
+          // 视图里是 LF，落盘按这个文件原来的习惯（CRLF 的还写 CRLF）。
+          const wire = usesCRLF ? String(content).replace(/\n/g, '\r\n') : content
+          setBusy(true)
+          try {
+            const r = await fetch(`${API}/doc/save`, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                stem,
+                content: wire,
+                version: typeof version === 'string' ? version : data.version,
+              }),
+            })
+            const d = await r.json()
+            if (d && d.ok) {
+              setData(
+                d.content
+                  ? d
+                  : Object.assign({}, data, { content: wire, version: d.version || data.version }),
+              )
+              setConflict(null)
+              setFlash(note || '已保存')
+              if (onChanged) onChanged()
+              return d
+            }
+            if (d && d.conflict) {
+              // 把「我原本要写什么」一起存下来。冲突条上那个「用我的覆盖」
+              // 必须写这份待存内容，而不是 draft —— draft 只装当前这一节，
+              // 删行/删节时甚至是空的，直接提交会把整库写成一节。
+              setConflict(Object.assign({}, d, { pending: content, note: note || '' }))
+              setFlash('')
+              return null
+            }
+            setErr((d && d.error) || '保存失败')
+            return null
+          } catch (e) {
+            setErr(String(e))
+            return null
+          } finally {
+            setBusy(false)
+          }
+        },
+        [data, stem, onChanged, usesCRLF],
+      )
+
+      /** 某一节在原文里的原始文本（编辑态草稿的基准）。 */
+      const secTextOf = (sec) =>
+        sec ? parsed.lines.slice(sec.start, sec.end).join('\n') : srcText
+
+      /** 编辑态还有没保存的改动 —— 切节、返回、关浮层之前都要问一句。 */
+      const dirty = mode === 'edit' && draft !== secTextOf(curSec)
+      const guardDirty = React.useCallback(() => {
+        if (!dirty) return true
+        return window.confirm('这一节还有没保存的修改，真的放弃吗？')
+      }, [dirty])
+
+      // 关浮层是点遮罩触发的，事件在 TreePanel 手里 —— 把守卫交出去。
+      React.useEffect(() => {
+        if (!onGuard) return undefined
+        onGuard(guardDirty)
+        return () => onGuard(null)
+      }, [onGuard, guardDirty])
+
+      const startEdit = () => {
+        if (!data) return
+        setDraft(secTextOf(curSec))
+        setMode('edit')
+      }
+
+      const commit = async () => {
+        if (!data) return
+        const next = mergeSectionText(srcText, curSec, draft)
+        const d = await save(next, '已保存这一节')
+        if (d) {
+          setMode('read')
+          setDraft('')
+        }
+      }
+
+      const delLine = async (lineNo) => {
+        if (!data) return
+        const lines = srcText.split('\n')
+        const idx = lineNo - 1
+        if (idx < 0 || idx >= lines.length) return
+        const preview = lines[idx]
+          .replace(/^\s*[-*]\s*/, '')
+          .trim()
+          .slice(0, 80)
+        if (!window.confirm(`删除这一行？\n\n${preview}`)) return
+        const next = lines
+          .slice(0, idx)
+          .concat(lines.slice(idx + 1))
+          .join('\n')
+        await save(next, '已删除 1 行')
+      }
+
+      const undo = async () => {
+        setBusy(true)
+        try {
+          const r = await fetch(`${API}/doc/undo`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ stem, version: data ? data.version : undefined }),
+          })
+          const d = await r.json()
+          if (d && d.ok && d.content) {
+            setMode('read')
+            setDraft('')
+            setData(d)
+            setConflict(null)
+            setFlash('已撤销上一步')
+            if (onChanged) onChanged()
+          } else if (d && d.conflict) {
+            // 撤销也要过版本关：期间别处写过，就不能一键盖回去。
+            setConflict(Object.assign({}, d, { pending: null, note: '' }))
+          } else {
+            setFlash((d && d.error) || '没有可撤销的版本')
+          }
+        } catch (e) {
+          setFlash(String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const addSection = async () => {
+        const t = newTitle.trim()
+        if (!t || !data) return
+        const base = srcText.replace(/\s+$/, '')
+        const next = `${base}\n\n## ${t}\n\n`
+        const d = await save(next, '已新增章节')
+        if (d) {
+          setAdding(false)
+          setNewTitle('')
+          setActive(Math.max(0, splitDocText(d.content || next).sections.length - 1))
+        }
+      }
+
+      const delSection = async () => {
+        if (!curSec || !data) return
+        if (!window.confirm(`删除章节「${curSec.title}」？\n整节（含下面所有条目）都会一起删掉。`)) {
+          return
+        }
+        const lines = srcText.split('\n')
+        const next = lines
+          .slice(0, curSec.start)
+          .concat(lines.slice(curSec.end))
+          .join('\n')
+        const d = await save(next, '已删除这一节')
+        if (d) setActive(0)
+      }
+
+      // 「+ 条目」不直接写空行：先落到编辑态，让用户当场把内容打出来再存
+      const startAddEntry = () => {
+        if (!data) return
+        const secText = curSec ? parsed.lines.slice(curSec.start, curSec.end).join('\n') : srcText
+        setDraft(`${secText.replace(/\s+$/, '')}\n- `)
+        setMode('edit')
+      }
+
+      const ql = q.trim().toLowerCase()
+      const shown = ql
+        ? sections
+            .map((s) => {
+              const text = parsed.lines.slice(s.start, s.end).join('\n')
+              const lower = text.toLowerCase()
+              return lower.includes(ql) ? Object.assign({}, s, { count: countHits(text, ql) }) : null
+            })
+            .filter(Boolean)
+        : sections
+
+      const bodyText = curSec
+        ? parsed.lines.slice(curSec.start + 1, curSec.end).join('\n')
+        : srcText
+      const bodyBase = curSec ? curSec.start + 2 : 1
+
+      return h(
+        React.Fragment,
+        null,
+        h(
+          'div',
+          { style: PANEL.head },
+          h(
+            'button',
+            {
+              type: 'button',
+              style: sb(),
+              onClick: () => {
+                if (!guardDirty()) return
+                onBack()
+              },
+              title: '回到总览',
+            },
+            '← 返回',
+          ),
+          h(
+            'strong',
+            { style: { fontSize: 13, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            data ? docTitleOf(srcText, stem) : stem,
+          ),
+          h(
+            'span',
+            {
+              style: {
+                fontSize: 9.5,
+                color: stem === 'AGENTS' ? TH.brand : TH.fg2,
+                border: `1px solid ${stem === 'AGENTS' ? TH.brand : TH.border2}`,
+                borderRadius: 999,
+                padding: '0 6px',
+                lineHeight: '15px',
+              },
+              title: stem === 'AGENTS' ? '每轮自动加载的中央记忆' : '只在命中时注入',
+            },
+            stem === 'AGENTS' ? 'AGENTS.md' : `${stem}.md`,
+          ),
+          h('span', { style: { flex: 1 } }),
+          h('input', {
+            value: q,
+            placeholder: '在本库内找…',
+            onChange: (e) => setQ(e.target.value),
+            style: Object.assign({ width: 150 }, PANEL.input),
+          }),
+          h(
+            'button',
+            {
+              type: 'button',
+              style: sb(),
+              onClick: () => {
+                if (!guardDirty()) return
+                load()
+              },
+            },
+            busy ? '…' : '刷新',
+          ),
+        ),
+        // 冲突条：只在真的撞车时出现，且必给两条明确出路
+        conflict
+          ? h(
+              'div',
+              {
+                style: {
+                  padding: '8px 14px',
+                  background: TH.bg1,
+                  borderBottom: `1px solid ${TH.border}`,
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  fontSize: 11,
+                  color: TH.warn,
+                },
+              },
+              h(
+                'span',
+                { style: { flex: 1, minWidth: 200 } },
+                conflict.pending === null
+                  ? '这个文件刚被别处改过了 —— 撤销会把那些改动一起盖回去，先载入最新再说。'
+                  : '这个文件刚被别处改过了，你手上的不是最新版 —— 直接保存会盖掉那些改动。',
               ),
               h(
                 'button',
                 {
                   type: 'button',
-                  style: btn('no'),
-                  onClick: () => setLookOpen((v) => !v),
-                  title: '浮层的形状 / 颜色 / 大小（拖动圆片可移动位置）',
-                },
-                lookOpen ? '⚙ 外观' : '⚙',
-              ),
-              h(
-                'input',
-                {
-                  value: query,
-                  placeholder: '筛选库 / 章节',
-                  onChange: (e) => setQuery(e.target.value),
-                  style: {
-                    width: 150,
-                    background: TH.bg2,
-                    color: TH.fg,
-                    border: `1px solid ${TH.border2}`,
-                    borderRadius: 6,
-                    padding: '3px 8px',
-                    fontSize: 11,
+                  style: sb(),
+                  onClick: () => {
+                    setMode('read')
+                    setDraft('')
+                    setData(Object.assign({}, data, { content: conflict.content, version: conflict.version }))
+                    setConflict(null)
+                    setFlash('已载入最新版本')
                   },
                 },
+                '载入最新（我的改动丢掉）',
               ),
-              h(
-                'button',
-                { type: 'button', style: btn('no'), onClick: reload },
-                loading ? '…' : '刷新',
-              ),
-              h('button', { type: 'button', style: btn('no'), onClick: onClose }, '关闭'),
-            ),
-            // 概览条
-            h(
+              conflict.pending === null
+                ? null
+                : h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: sb(true),
+                      onClick: async () => {
+                        const d = await save(
+                          conflict.pending,
+                          conflict.note || '已用我的版本覆盖',
+                          conflict.version,
+                        )
+                        if (d) {
+                          setMode('read')
+                          setDraft('')
+                        }
+                      },
+                    },
+                    '用我的覆盖',
+                  ),
+            )
+          : null,
+        flash || err
+          ? h(
               'div',
               {
                 style: {
-                  padding: '8px 16px',
-                  borderBottom: `1px solid ${TH.border}`,
-                  color: TH.fg2,
+                  padding: '6px 14px',
                   fontSize: 11,
+                  color: err ? TH.warn : TH.fg2,
+                  borderBottom: `1px solid ${TH.border}`,
                   display: 'flex',
-                  gap: 14,
-                  flexWrap: 'wrap',
+                  gap: 10,
+                  alignItems: 'center',
                 },
               },
-              ...biggest.map((l) =>
-                h('span', { key: l.stem }, `${l.label} ${fmtTok(l.tokens)}`),
-              ),
-            ),
-            // 外观（形状 / 颜色 / 大小 / 位置）
-            lookOpen
-              ? h(
+              h('span', { style: { flex: 1 } }, err || flash),
+              h('button', { type: 'button', style: sb(), onClick: () => (setFlash(''), setErr('')) }, '×'),
+            )
+          : null,
+        h(
+          'div',
+          { style: { flex: 1, display: 'flex', minHeight: 0 } },
+          // 左栏：章节
+          h(
+            'div',
+            {
+              style: {
+                width: 248,
+                flexShrink: 0,
+                borderRight: `1px solid ${TH.border}`,
+                overflowY: 'auto',
+                padding: '8px 8px 16px',
+              },
+            },
+            ...shown.map((s) =>
+              h(
+                'div',
+                {
+                  key: s.i,
+                  onClick: () => {
+                    if (s.i === (curSec ? curSec.i : -1)) return
+                    if (!guardDirty()) return
+                    setActive(s.i)
+                    setMode('read')
+                    setDraft('')
+                  },
+                  style: {
+                    padding: '5px 8px',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    background: curSec && curSec.i === s.i ? TH.bg2 : 'transparent',
+                    opacity: s.meta ? 0.6 : 1,
+                  },
+                },
+                h(
                   'div',
                   {
                     style: {
-                      padding: '8px 16px 10px',
-                      borderBottom: '1px solid ' + TH.border,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 8,
-                      background: TH.bg1,
+                      fontSize: 11.5,
+                      lineHeight: 1.45,
+                      fontWeight: curSec && curSec.i === s.i ? 600 : 400,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
                     },
                   },
+                  s.title,
+                ),
+                h(
+                  'div',
+                  { style: { fontSize: 9.5, color: TH.fg2, marginTop: 1 } },
+                  `${fmtTok(s.tokens)} tok · ${s.entries} 条`,
+                  s.count ? ` · 命中 ${s.count}` : '',
+                ),
+              ),
+            ),
+            !sections.length
+              ? h(
+                  'div',
+                  { style: { padding: '8px', fontSize: 10.5, color: TH.fg2, lineHeight: 1.7 } },
+                  '这个文件还没有 `## ` 章节 —— 从下面「+ 章节」加一节。',
+                )
+              : null,
+            ql && !shown.length
+              ? h(
+                  'div',
+                  { style: { padding: '8px', fontSize: 10.5, color: TH.fg2, lineHeight: 1.7 } },
+                  '没有哪一节含这个词。',
+                )
+              : null,
+            h(
+              'div',
+              { style: { marginTop: 8, paddingTop: 8, borderTop: `1px solid ${TH.border}` } },
+              adding
+                ? h(
+                    'div',
+                    { style: { display: 'flex', gap: 6 } },
+                    h('input', {
+                      value: newTitle,
+                      placeholder: '新章节标题',
+                      autoFocus: true,
+                      onChange: (e) => setNewTitle(e.target.value),
+                      onKeyDown: (e) => {
+                        if (e.key === 'Enter') addSection()
+                        if (e.key === 'Escape') setAdding(false)
+                      },
+                      style: Object.assign({ flex: 1, minWidth: 0 }, PANEL.input),
+                    }),
+                    h('button', { type: 'button', style: sb(true), onClick: addSection }, '建'),
+                  )
+                : h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: Object.assign({ width: '100%' }, sb()),
+                      onClick: () => {
+                        setAdding(true)
+                        setNewTitle('')
+                      },
+                    },
+                    '+ 章节',
+                  ),
+            ),
+          ),
+          // 右栏：正文 / 编辑器
+          h(
+            'div',
+            { style: { flex: 1, minWidth: 0, overflowY: 'auto', padding: '12px 22px 40px' } },
+            mode === 'edit'
+              ? h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
                   h(
                     'div',
-                    { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                    h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '颜色'),
-                    ...PALETTES.map((p) =>
-                      h('button', {
-                        key: p.id,
-                        type: 'button',
-                        title: p.name,
-                        onClick: () => setLookNow({ color: p.id }),
-                        style: {
-                          cursor: 'pointer',
-                          width: 22,
-                          height: 22,
-                          borderRadius: 999,
-                          padding: 0,
-                          background: p.bd || TH.bg2,
-                          border:
-                            cur.color === p.id
-                              ? '2px solid ' + TH.fg
-                              : '1px solid ' + TH.border2,
-                        },
-                      }),
-                    ),
+                    { style: { fontSize: 10.5, color: TH.fg2, lineHeight: 1.7 } },
+                    curSec
+                      ? `正在改「${curSec.title}」—— 只覆盖这一节，别的节一个字节都不动。`
+                      : '正在改整篇。',
+                  ),
+                  h('textarea', {
+                    value: draft,
+                    spellCheck: false,
+                    onChange: (e) => setDraft(e.target.value),
+                    onKeyDown: (e) => {
+                      if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault()
+                        commit()
+                      }
+                    },
+                    style: {
+                      width: '100%',
+                      minHeight: 340,
+                      height: 'calc(90vh - 320px)',
+                      resize: 'vertical',
+                      background: TH.bg1,
+                      color: TH.fg,
+                      border: `1px solid ${TH.border2}`,
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      fontSize: 12.5,
+                      lineHeight: 1.75,
+                      fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+                      outline: 'none',
+                    },
+                  }),
+                  h(
+                    'div',
+                    { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
                     h(
-                      'span',
-                      { style: { color: TH.fg2, fontSize: 11 } },
-                      (PALETTES.find((p) => p.id === cur.color) || PALETTES[0]).name,
+                      'button',
+                      { type: 'button', style: sb(true), onClick: commit, disabled: busy },
+                      busy ? '保存中…' : '保存（Ctrl+S）',
                     ),
-                  ),
-                  h(
-                    'div',
-                    { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                    h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '形状'),
-                    ...SHAPES.map((s) =>
-                      h(
-                        'button',
-                        {
-                          key: s.id,
-                          type: 'button',
-                          title: s.name,
-                          onClick: () => setLookNow({ shape: s.id }),
-                          style: Object.assign({}, btn('no'), {
-                            color: cur.shape === s.id ? TH.ok : TH.fg2,
-                            borderColor: cur.shape === s.id ? TH.ok : TH.border2,
-                          }),
-                        },
-                        s.name,
-                      ),
-                    ),
-                    h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '大小'),
-                    ...SIZES.map((s) =>
-                      h(
-                        'button',
-                        {
-                          key: s.id,
-                          type: 'button',
-                          title: s.name,
-                          onClick: () => setLookNow({ size: s.id }),
-                          style: Object.assign({}, btn('no'), {
-                            color: cur.size === s.id ? TH.ok : TH.fg2,
-                            borderColor: cur.size === s.id ? TH.ok : TH.border2,
-                          }),
-                        },
-                        s.name,
-                      ),
-                    ),
-                  ),
-                  h(
-                    'div',
-                    { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                    h('span', { style: { color: TH.fg2, fontSize: 11, width: 28 } }, '位置'),
                     h(
                       'button',
                       {
                         type: 'button',
-                        style: btn('no'),
-                        onClick: () => setLookNow({ pos: {} }),
+                        style: sb(),
+                        onClick: () => {
+                          setMode('read')
+                          setDraft('')
+                        },
                       },
-                      '复位到右下角',
+                      '取消',
                     ),
+                    curSec
+                      ? h('button', { type: 'button', style: sb(), onClick: delSection }, '删除这一节')
+                      : null,
+                    h('span', { style: { flex: 1 } }),
                     h(
                       'span',
-                      { style: { color: TH.fg2, fontSize: 11 } },
-                      '按住圆片拖即可移动，位置会记住；右键圆片可直接打开这里。',
+                      { style: { fontSize: 10.5, color: TH.fg2 } },
+                      `${draft.length} 字`,
                     ),
                   ),
                 )
-              : null,
-            err
-              ? h(
+              : h(
                   'div',
-                  { style: { padding: '8px 16px', color: TH.warn, fontSize: 11 } },
-                  err,
-                )
-              : null,
-            // 列表
-            h(
-              'div',
-              { style: { overflowY: 'auto', padding: '8px 12px 16px' } },
-              // 空态：没有记忆库时给一句话，别让面板一片空白
-              libs.length === 0
-                ? h(
-                    'div',
-                    {
-                      style: {
-                        padding: '28px 8px',
-                        textAlign: 'center',
-                        color: TH.fg2,
-                        fontSize: 12,
-                        lineHeight: 1.8,
-                      },
-                    },
-                    h('div', { style: { fontSize: 24, marginBottom: 8 } }, '🗂'),
-                    h('div', null, '还没有找到任何记忆库。'),
-                    h('div', null, '可以一键生成一套起手模板，也可以自己放 markdown 文件进来。'),
-                    h(StarterButtons, { onDone: reload }),
-                  )
-                : null,
-              ...filtered.map((lib) => {
-                const open2 = expanded[lib.stem]
-                return h(
-                  'div',
-                  { key: lib.stem, style: { marginBottom: 6 } },
+                  null,
                   h(
                     'div',
                     {
                       style: {
                         display: 'flex',
-                        alignItems: 'center',
                         gap: 8,
-                        cursor: 'pointer',
-                        padding: '5px 6px',
-                        borderRadius: 6,
-                        background: open2 ? TH.bg1 : 'transparent',
+                        alignItems: 'center',
+                        marginBottom: 10,
+                        flexWrap: 'wrap',
                       },
-                      onClick: () =>
-                        setExpanded((prev) => ({ ...prev, [lib.stem]: !prev[lib.stem] })),
                     },
-                    h('span', { style: { width: 10, color: TH.fg2 } }, open2 ? '▾' : '▸'),
-                    h('span', { style: { fontSize: 12, fontWeight: 600 } }, lib.label),
-                    h(
-                      'span',
-                      { style: { color: TH.fg2, fontSize: 10, fontFamily: 'monospace' } },
-                      lib.stem,
-                    ),
-                    lib.tags.length
+                    data && data.exists === false
                       ? h(
-                          'span',
-                          { style: { color: TH.brand, fontSize: 10 } },
-                          lib.tags.join(' · '),
+                          'button',
+                          {
+                            type: 'button',
+                            style: sb(true),
+                            onClick: () =>
+                              save(`# ${stem === 'AGENTS' ? 'AGENTS' : stem}\n\n`, '已建立文件'),
+                          },
+                          '建立文件',
                         )
                       : null,
+                    h('button', { type: 'button', style: sb(), onClick: startEdit }, '✎ 编辑本节'),
+                    h('button', { type: 'button', style: sb(), onClick: startAddEntry }, '+ 条目'),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        style: Object.assign({}, sb(), mode === 'organize' ? { color: TH.warn, borderColor: TH.warn } : {}),
+                        onClick: () => setMode(mode === 'organize' ? 'read' : 'organize'),
+                        title: '整理模式下每行右边出现删除键',
+                      },
+                      mode === 'organize' ? '✓ 整理中' : '整理',
+                    ),
+                    // 撤销以前只长在 5 秒就消失的提示条里 —— 想用的时候早没了。
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        style: sb(),
+                        onClick: () => {
+                          if (!guardDirty()) return
+                          undo()
+                        },
+                        title: '把文件退回上一次保存之前（也会过版本关）',
+                      },
+                      '↶ 撤销',
+                    ),
                     h('span', { style: { flex: 1 } }),
                     h(
                       'span',
-                      { style: { color: TH.fg2, fontSize: 11 } },
-                      `${lib.sections.length} 节 · ${fmtTok(lib.tokens)} tok`,
+                      { style: { fontSize: 10.5, color: TH.fg2 } },
+                      data ? `${sections.length} 节 · 约 ${fmtTok(data.tokens)} tok` : '',
                     ),
                   ),
-                  open2
+                  data && data.exists === false
                     ? h(
                         'div',
-                        { style: { paddingLeft: 22, paddingTop: 4 } },
-                        ...lib.sections.map((s, i) =>
-                          h(
-                            'div',
-                            {
-                              key: i,
-                              style: {
-                                display: 'flex',
-                                gap: 8,
-                                fontSize: 11,
-                                padding: '2px 0',
-                                opacity: s.meta ? 0.55 : 1,
-                              },
-                            },
-                            h(
-                              'span',
-                              {
-                                style: {
-                                  color: TH.fg2,
-                                  fontFamily: 'monospace',
-                                  minWidth: 62,
-                                },
-                                title: '行号区间',
-                              },
-                              `${s.line}-${s.endLine}`,
-                            ),
-                            h(
-                              'span',
-                              { style: { minWidth: 46, color: TH.fg2 } },
-                              fmtTok(s.tokens),
-                            ),
-                            h('span', { style: { flex: 1 } }, s.title),
-                            s.entries > 0
-                              ? h(
-                                  'span',
-                                  { style: { color: TH.fg2, fontSize: 10 } },
-                                  `${s.entries} 条`,
-                                )
-                              : null,
-                            s.tags.length
-                              ? h(
-                                  'span',
-                                  { style: { color: TH.brand, fontSize: 10 } },
-                                  s.tags.slice(0, 3).join('/'),
-                                )
-                              : null,
-                          ),
-                        ),
+                        {
+                          style: {
+                            fontSize: 11.5,
+                            color: TH.fg2,
+                            lineHeight: 1.8,
+                            margin: '0 0 12px',
+                          },
+                        },
+                        '这个文件还不存在 —— 点「建立文件」写一个标题，或者直接从左边加章节。',
                       )
                     : null,
-                )
-              }),
-            ),
+                  data && data.exists !== false && !String(data.content || '').trim()
+                    ? h(
+                        'div',
+                        { style: { fontSize: 11.5, color: TH.fg2, lineHeight: 1.8, margin: '0 0 12px' } },
+                        '这个文件是空的 —— 从左边「+ 章节」加第一节，或者点「✎ 编辑本节」直接写。',
+                      )
+                    : null,
+                  curSec
+                    ? h(
+                        'h3',
+                        { style: { fontSize: 16, fontWeight: 600, margin: '2px 0 10px' } },
+                        curSec.title,
+                      )
+                    : null,
+                  ...renderMd(bodyText, bodyBase, mode === 'organize' ? delLine : null),
+                ),
+          ),
+        ),
+      )
+    }
+
+    function TreePanel({ onClose, look, setLook, startLook }) {
+      try {
+        const { tree, err, loading, reload } = useTree(true)
+        const [lookOpen, setLookOpen] = React.useState(Boolean(startLook))
+        const [openDoc, setOpenDoc] = React.useState(null)
+        const setLookNow = setLook || (() => {})
+        const cur = look || LOOK_DEFAULT
+        // DocView 里「还有没保存的修改」这个判断，交给遮罩点击时问一句，
+        // 否则点一下就整页关掉、草稿没了。
+        const guardRef = React.useRef(null)
+        const setGuard = React.useCallback((fn) => {
+          guardRef.current = fn
+        }, [])
+
+        return h(
+          'div',
+          {
+            style: PANEL.overlay,
+            onClick: (e) => {
+              if (e.target !== e.currentTarget) return
+              if (guardRef.current && !guardRef.current()) return
+              onClose()
+            },
+          },
+          h(
+            'div',
+            { style: PANEL.box },
+            openDoc
+              ? h(DocView, {
+                  stem: openDoc.stem,
+                  startLine: openDoc.line,
+                  onGuard: setGuard,
+                  onBack: () => {
+                    setOpenDoc(null)
+                    reload()
+                  },
+                  onChanged: reload,
+                })
+              : h(AtlasView, {
+                  tree,
+                  err,
+                  loading,
+                  reload,
+                  onOpen: (stem, line) => setOpenDoc({ stem, line: line || 0 }),
+                  lookOpen,
+                  setLookOpen,
+                  cur,
+                  setLookNow,
+                  onClose,
+                }),
           ),
         )
       } catch {
         return null
       }
     }
-
     // 浮层入口：小圆片，点开树面板。
     // 为什么放 shell.overlay 而不是 sidebar.panellist ——
     //   sidebar.panellist 的约定是「每个 id 对应一个主面板」，侧栏自己画按钮、
@@ -1363,7 +3016,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   ref: drag.ref,
                   style: chipLook(look),
-                  title: '记忆库结构（拖动可移动，右键调外观）',
+                  title: '记忆库（拖动可移动，右键调外观）',
                   onClick: () => {
                     if (drag.consumeSkip()) return
                     setWantLook(false)

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Almost For Ever",
-    "description": "Live memory index: derives a catalog from the structure of your memory files, ranks by tag overlap, and injects only the few matching entries each turn."
+    "description": "Live memory index and visual workbench: ranks tags and body text each turn and injects only matching entries. Open “🗂 记忆库” in the corner for a library atlas with cross-library search, reading, section and entry editing, version-conflict protection, and snapshot undo. Model-proposed writes still require sticky-note confirmation. Reads and writes only local memory files and AGENTS.md."
   }
 }

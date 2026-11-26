@@ -339,6 +339,9 @@ export function deriveIndex(memoryDir) {
         const names = tagHit[1].split(/[,，、]/).map((x) => x.trim()).filter(Boolean)
         if (cur) cur.tags.push(...names)
         else libTags.push(...names)
+        // 标签注释行不进正文（不算字数），但它确实是这一节的最后一行 ——
+        // 行号区间不含它，读文件的 AI 就会漏掉节尾的那一条。
+        if (cur) cur.lastLine = i + 1
         continue
       }
       if (line.startsWith('# ') && !libTitle) {
@@ -348,21 +351,38 @@ export function deriveIndex(memoryDir) {
       if (line.startsWith('## ')) {
         pushEntry()
         if (cur) sections.push(cur)
-        cur = { title: stripMd(line.slice(3)), line: i + 1, body: [], tags: [], entries: [] }
+        cur = {
+          title: stripMd(line.slice(3)),
+          line: i + 1,
+          lastLine: i + 1,
+          body: [],
+          tags: [],
+          entries: [],
+        }
         continue
       }
       // 条目级：行首 `- ` 或 `* ` 开启一条，续行归入上一条
       if (cur && /^\s*[-*] /.test(line)) {
         pushEntry()
-        curEntry = { head: stripMd(line.replace(/^\s*[-*] /, '')), line: i + 1, body: [line] }
+        curEntry = {
+          head: stripMd(line.replace(/^\s*[-*] /, '')),
+          line: i + 1,
+          lastLine: i + 1,
+          body: [line],
+        }
         // ⚠️ 条目行必须同时进 cur.body —— 否则正文兜底维度只看得到非列表行，
         // 且 UI 面板的字符数会严重低估（实测少算 66%）。
         cur.body.push(stripMd(line))
+        cur.lastLine = i + 1
         continue
       }
       if (cur) {
         cur.body.push(stripMd(line))
-        if (curEntry) curEntry.body.push(line)
+        cur.lastLine = i + 1
+        if (curEntry) {
+          curEntry.body.push(line)
+          curEntry.lastLine = i + 1
+        }
       } else {
         pinned.push(stripMd(line))
       }
@@ -387,9 +407,17 @@ export function deriveIndex(memoryDir) {
           const text = stripMd(
             raw.replace(/^\s*[-*] /, '').replace(/^\s*\d+[.、)]\s/, '').replace(/^#{3,} /, ''),
           )
-          curP = { title: text.slice(0, 48), line: i + 1, body: [stripMd(raw)], tags: [], entries: [] }
+          curP = {
+            title: text.slice(0, 48),
+            line: i + 1,
+            lastLine: i + 1,
+            body: [stripMd(raw)],
+            tags: [],
+            entries: [],
+          }
         } else if (curP) {
           curP.body.push(stripMd(raw))
+          curP.lastLine = i + 1
         }
       }
       if (curP) pieces.push(curP)
@@ -433,7 +461,9 @@ export function deriveIndex(memoryDir) {
           line: s.line,
           // 原始正文：同分排序要回答「这个词到底出现几次」，而 token 集合是去重的。
           bodyRaw: bodyText,
-          endLine: s.line + s.body.length,
+          // 真实末行。以前用「起始行 + 正文行数」推，跳过的标签注释行不算进去，
+          // 带标签的节尾就被切掉一行，读文件的范围跟着少一行。
+          endLine: s.lastLine || s.line,
           // 真实正文字符数 —— UI 面板据此估算 token（中文约 1.5 字符/token）
           chars,
           meta: META_SECTION.test(s.title),
@@ -451,7 +481,7 @@ export function deriveIndex(memoryDir) {
           entries: s.entries.map((e) => ({
             head: e.head,
             line: e.line,
-            endLine: e.line + e.body.length - 1,
+            endLine: e.lastLine || e.line,
             tokens: tokenize(e.head),
             bodyTokens: tokenize(e.body.map(stripMd).join(' ')),
           })),
@@ -597,7 +627,7 @@ export function search(libs, query, limit = 3) {
  * 命中章节后，再在章节内定位到「最贴近的那一条」，给出条目级行号。
  * 章节可能 4800 tok，条目中位 88 tok —— 精确到条才真省钱。
  */
-function bestEntry(sec, qTok) {
+export function bestEntry(sec, qTok) {
   if (!sec.entries || sec.entries.length === 0) return null
   let best = null
   for (const e of sec.entries) {
@@ -708,7 +738,17 @@ export function apply(ctx, config = {}) {
   // 写入模式（候选收集 + 便利贴接口）挂在这个 ctx 上。
   try {
     // deriveIndex 通过参数传入 —— 从 write-mode.js 反向 import index.js 会成环。
-    applyWriteMode(ctx, { ...config, memoryDir, deriveIndex, debug: true })
+    applyWriteMode(ctx, {
+      ...config,
+      memoryDir,
+      deriveIndex,
+      debug: true,
+      // 结构面板的检索要跟自动注入用**同一套**打分，否则面板上说「最相关」
+      // 和真正喂给模型的那条会不一致，用户会以为插件坏了。
+      search,
+      tokenize,
+      bestEntry,
+    })
   } catch (e) {
     // 写入模式坏了也不能拖垮只读检索
     try {

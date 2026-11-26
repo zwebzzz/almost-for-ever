@@ -1,8 +1,8 @@
 {
   "name": "almost-for-ever",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "type": "module",
-  "description": "Live memory index for DSH: derives a catalog from your memory files on every turn, injects only the matching entries, and lets the model propose candidates you confirm before they are written.",
+  "description": "Live memory index and visual workbench for DSH: retrieves matching memory entries each turn, and provides a library atlas with full-text search, safe editing, and confirmed writes.",
   "keywords": [
     "deepseek-harness",
     "dsh",
