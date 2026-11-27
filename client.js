@@ -3125,7 +3125,7 @@ window.__ModuleLoader__.load({
     }
 
     // 插件标识：一张带三行字的卡片 —— 跟 icon.svg 同一套形状。
-    function Mark({ size = 30 }) {
+    function Mark({ size = 30, color = TH.brand }) {
       return h(
         'svg',
         {
@@ -3142,12 +3142,12 @@ window.__ModuleLoader__.load({
           width: 17.6,
           height: 15.6,
           rx: 3,
-          stroke: TH.brand,
+          stroke: color,
           strokeWidth: 1.6,
         }),
         h('path', {
           d: 'M7.4 9.2h9.2M7.4 12.4h9.2M7.4 15.6h5.4',
-          stroke: TH.brand,
+          stroke: color,
           strokeWidth: 1.4,
           strokeLinecap: 'round',
           opacity: 0.8,
@@ -3445,7 +3445,7 @@ window.__ModuleLoader__.load({
         typeof raw === 'string' ? raw : raw && typeof raw.id === 'string' ? raw.id : ''
 
       const [data, setData] = React.useState(null)
-      const [offline, setOffline] = React.useState(false)
+      const [offline, setOffline] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const pageRef = React.useRef(null)
 
@@ -3531,52 +3531,136 @@ window.__ModuleLoader__.load({
       const topLibs = libs.slice(0, 10)
       const recent = (data && data.recent) || []
       const intervalValue = (data && data.interval && data.interval.value) || 0
+      const connecting = offline === null
 
       return h(
         'div',
         { style: V.page, ref: pageRef },
-        // ① 标识
+        // ① 标识：和记忆地图的中央主卡同一套深墨封面。
+        // 这一屏同时承担「这是什么插件」的第一眼，不再只是一行裸标题。
         h(
           'div',
-          { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 } },
-          h(Mark, { size: 34 }),
+          {
+            style: {
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 14,
+              padding: '17px 18px',
+              marginBottom: 4,
+              borderRadius: 16,
+              color: '#f7faff',
+              background: TH.brand,
+              backgroundImage:
+                'radial-gradient(circle at 82% 0%, rgba(255,255,255,0.13), transparent 34%), linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 42%, #17263d) 0%, color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, #17263d) 100%)',
+              border: '1px solid rgba(255,255,255,0.16)',
+              boxShadow: '0 12px 30px rgba(30,50,80,0.16)',
+              overflow: 'hidden',
+            },
+          },
+          // 图标与文案作为同一个 flex 项：窄屏时状态可以换行，图标不会掉成孤行。
           h(
             'div',
-            { style: { flex: 1, minWidth: 0 } },
+            {
+              style: {
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                flex: '1 1 340px',
+                minWidth: 0,
+              },
+            },
+          h(
+            'span',
+            {
+              style: {
+                position: 'relative',
+                width: 50,
+                height: 54,
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 13,
+                background: 'rgba(255,255,255,0.10)',
+                border: '1px solid rgba(255,255,255,0.16)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10)',
+              },
+            },
+            h(Mark, { size: 30, color: '#dceaff' }),
+          ),
+          h(
+            'div',
+            { style: { position: 'relative', flex: 1, minWidth: 0 } },
             h(
               'div',
-              { style: { fontSize: 17, fontWeight: 600, letterSpacing: 0.2 } },
+              {
+                style: {
+                  fontSize: 10,
+                  letterSpacing: 1.3,
+                  color: 'rgba(230,240,255,0.78)',
+                  fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+                },
+              },
+              'PERSISTENT MEMORY · LOCAL MARKDOWN',
+            ),
+            h(
+              'div',
+              { style: { fontSize: 20, fontWeight: 650, letterSpacing: 0.2, lineHeight: 1.3, marginTop: 2 } },
               'Almost For Ever',
             ),
             h(
               'div',
-              { style: { fontSize: 11, color: TH.fg2 } },
-              '长期、可塑的记忆 —— 索引在运行时从你的记忆库派生，不预存',
+              { style: { fontSize: 12, color: 'rgba(240,246,255,0.74)', marginTop: 4 } },
+              '本地长期记忆与个人知识库，在需要时把相关记忆带进对话。',
             ),
+          ),
           ),
           h(
             'div',
             {
               style: {
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 6,
+                gap: 7,
                 fontSize: 11,
-                color: offline ? TH.fg2 : TH.ok,
+                fontWeight: 500,
+                color: connecting ? 'rgba(230,240,255,0.78)' : offline ? '#ffd79a' : '#b8f4cf',
+                background: connecting
+                  ? 'rgba(255,255,255,0.08)'
+                  : offline
+                    ? 'rgba(220,160,70,0.14)'
+                    : 'rgba(70,200,140,0.14)',
+                border: connecting
+                  ? '1px solid rgba(255,255,255,0.14)'
+                  : offline
+                    ? '1px solid rgba(255,205,130,0.25)'
+                    : '1px solid rgba(130,240,180,0.25)',
+                borderRadius: 999,
+                padding: '5px 10px',
                 flexShrink: 0,
+                marginLeft: 'auto',
               },
-              title: offline ? '拉不到数据：DSH 可能刚重启，或插件没装上' : '运行中',
+              title: connecting
+                ? '正在读取本地运行数据'
+                : offline
+                  ? '拉不到数据：DSH 可能刚重启，或插件没装上'
+                  : '本地运行中',
             },
             h('span', {
               style: {
-                width: 7,
-                height: 7,
+                width: 6,
+                height: 6,
                 borderRadius: 999,
-                background: offline ? TH.fg2 : TH.ok,
+                background: connecting ? '#dceaff' : offline ? '#e8b86a' : '#62dfa0',
+                boxShadow: connecting || offline ? 'none' : '0 0 0 3px rgba(98,223,160,0.12)',
                 display: 'inline-block',
               },
             }),
-            offline ? '未连接' : '运行中',
+            connecting ? '连接中…' : offline ? '未连接' : '本地运行中',
           ),
         ),
         offline
